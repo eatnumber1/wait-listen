@@ -4,7 +4,7 @@
 // whose arguments are (const struct sock *sk, int oldstate, int newstate),
 // passed as an array of u64 on every architecture: no kernel struct layout,
 // no BTF needed.
-#include "bpf_types.h"
+#include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
 #define TCP_LISTEN 10

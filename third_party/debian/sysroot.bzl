@@ -66,6 +66,17 @@ filegroup(
 )
 
 exports_files(glob(["usr/lib/llvm-*/lib/clang/*/lib/linux/*"], allow_empty = True))
+
+# The kernel's UAPI headers alone (linux/, asm-generic/, each architecture's
+# asm/), for code that must not see the libc, such as BPF programs.
+filegroup(
+    name = "kernel_headers",
+    srcs = glob(
+        ["usr/include/linux/**", "usr/include/asm-generic/**", "usr/include/*-linux-gnu*/asm/**"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
 """)
 
 debian_sysroot = repository_rule(

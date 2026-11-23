@@ -1,13 +1,17 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 # The BPF object, compiled with the hermetic Clang for -target bpf. BPF
-# bytecode is the same for every host architecture.
+# bytecode is the same for every host architecture. Only the kernel UAPI
+# headers (pinned, from Debian's linux-libc-dev) and libbpf's BPF helper
+# headers are visible: -nostdinc keeps the host and the libc out. asm/ comes
+# from the x86_64 headers; for -target bpf every architecture's asm/types.h
+# gives the same fixed-width types.
 genrule(
     name = "bpf_object",
     srcs = [
         "src/wait_listen.bpf.c",
-        "src/bpf_types.h",
         "@libbpf//:source_headers",
+        "@debian_sysroot_amd64_musl//:kernel_headers",
     ],
     outs = ["wait_listen.bpf.o"],
     cmd = """
@@ -19,8 +23,15 @@ genrule(
             */src/bpf_helpers.h|*/src/bpf_helper_defs.h) cp $$f $$inc/bpf/ ;;
           esac
         done
+        uapi=""
+        for f in $(execpaths @debian_sysroot_amd64_musl//:kernel_headers); do
+          case $$f in
+            */usr/include/linux/bpf.h) uapi=$$(dirname $$(dirname $$f)) ;;
+          esac
+        done
+        test -n "$$uapi"
         $(execpath @llvm_musl_llvm//:bin/clang) -target bpf -O2 -g -Wall -Werror \
-          -nostdinc -I$$inc -I$$(dirname $(location src/bpf_types.h)) \
+          -nostdinc -I$$inc -I$$uapi -I$$uapi/x86_64-linux-gnu \
           -c $(location src/wait_listen.bpf.c) -o $@
     """,
     tools = ["@llvm_musl_llvm//:bin/clang"],
