@@ -10,9 +10,11 @@ set -euo pipefail
 
 # --- 1. disk -----------------------------------------------------------------
 before=$(df -h --output=avail / | tail -1)
+sudo=sudo
+[ "$(id -u)" -ne 0 ] || sudo=  # act's job container runs as root
 for d in /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL; do
 	if [ -d "$d" ]; then
-		sudo rm -rf "$d"
+		$sudo rm -rf "$d"
 	fi
 done
 echo "free on /: $before -> $(df -h --output=avail / | tail -1)"
