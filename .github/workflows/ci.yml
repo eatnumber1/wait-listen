@@ -1,0 +1,105 @@
+# CI: `test` runs the whole suite (`bazel test //...`: the unit test, and the
+# VM tests, which boot pinned Debian kernels in a pinned QEMU, TCG only, so no
+# KVM is needed); `release`, nightly and on demand, builds the static musl
+# binaries and publishes them as the `nightly` prerelease, unless main hasn't
+# changed since the last one.
+#
+# Developed and checked locally with nektos/act before pushing
+# (third_party/act/README.md): `bazel run //third_party/act -- -j test`.
+# Under act the release job builds but doesn't publish (no token).
+#
+# Actions are pinned by commit. Caches: the repository cache (downloads: the
+# ~2 GB LLVM tarball, the Debian packages) is keyed by the lock files and
+# saved only on a miss; the disk cache by commit, restoring the newest.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prepare
+        run: .github/ci/prepare.sh
+      - name: Restore repository cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/wl-bazel/repos
+          key: repos-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', 'third_party/debian/lock.json', '.bazelversion') }}
+          restore-keys: repos-
+      - name: Restore disk cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/wl-bazel/disk
+          key: disk-test-${{ github.sha }}
+          restore-keys: disk-test-
+      - name: Test
+        # The release configuration (.github/ci/release.sh), so the binaries
+        # the VM tests run are the ones the nightly ships.
+        run: bazel test -c opt --strip=always //...
+      - name: Save repository cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/wl-bazel/repos
+          key: repos-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', 'third_party/debian/lock.json', '.bazelversion') }}
+      - name: Save disk cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/wl-bazel/disk
+          key: disk-test-${{ github.sha }}
+
+  release:
+    needs: test
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Anything new since the last nightly?
+        id: new
+        run: |
+          last=$(git ls-remote origin refs/tags/nightly | cut -f1)
+          echo "last nightly: ${last:-none}; main: $GITHUB_SHA"
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "publish=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Prepare
+        if: steps.new.outputs.publish == 'true'
+        run: .github/ci/prepare.sh
+      - name: Restore repository cache
+        if: steps.new.outputs.publish == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/wl-bazel/repos
+          key: repos-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', 'third_party/debian/lock.json', '.bazelversion') }}
+          restore-keys: repos-
+      - name: Build
+        if: steps.new.outputs.publish == 'true'
+        run: .github/ci/release.sh dist
+      - name: Publish the nightly prerelease
+        if: steps.new.outputs.publish == 'true' && !env.ACT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "Nightly $(date -u +%Y-%m-%d) (${GITHUB_SHA::12})" \
+            --notes "Static musl builds of ${GITHUB_SHA} (x86-64 and 32-bit Arm). Verify with \`sha256sum -c SHA256SUMS\`."

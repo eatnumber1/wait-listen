@@ -1,0 +1,24 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+# `bazel run //third_party/act -- <act arguments>`: nektos/act with this
+# repository's pins (README.md). The wrapper is generated so that it can name
+# the act binary's runfiles path.
+genrule(
+    name = "act_sh",
+    srcs = [
+        "act.sh.tpl",
+        "@act//:act",
+    ],
+    outs = ["act_wrapper.sh"],
+    cmd = "sed 's|@ACT_RLOCATION@|$(rlocationpath @act//:act)|' $(location act.sh.tpl) > $@",
+)
+
+sh_binary(
+    name = "act",
+    srcs = [":act_sh"],
+    data = [
+        "runner_image.txt",
+        "@act//:act",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)

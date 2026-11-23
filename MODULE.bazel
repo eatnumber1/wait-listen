@@ -129,3 +129,15 @@ register_toolchains(
     "@llvm_musl//:all",
     "@llvm_toolchain//:all",
 )
+
+# nektos/act, to run .github/workflows/ci.yml locally before pushing
+# (third_party/act/README.md). A release binary, pinned by sha256; only
+# `bazel run //third_party/act` uses it.
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "act",
+    build_file = "//third_party/act:BUILD.act",
+    sha256 = "0191d6f1f3b716b5c55820032605d05fc3c1cdbf581ebeff655019e5dd1524c0",
+    urls = ["https://github.com/nektos/act/releases/download/v0.2.89/act_Linux_x86_64.tar.gz"],
+)
