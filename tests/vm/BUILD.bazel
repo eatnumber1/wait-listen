@@ -1,0 +1,109 @@
+# Root tests of wait-listen in VMs (DESIGN.md "Tests"): the pinned Debian
+# kernel and QEMU (third_party/debian/lock.json), an initramfs whose /init is
+# guest_init and which carries wait-listen, both built for the VM's CPU.
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# PID 1 of the test VMs: static, like wait-listen itself.
+cc_binary(
+    name = "guest_init",
+    srcs = ["guest_init.c"],
+    copts = [
+        "-Wall",
+        "-Werror",
+    ],
+    linkstatic = True,
+)
+
+# Runs during the build (exec platform).
+cc_binary(
+    name = "mkcpio",
+    srcs = ["mkcpio.c"],
+    copts = [
+        "-Wall",
+        "-Werror",
+    ],
+)
+
+_ARCHES = {
+    "x86_64": dict(
+        kernel = "@debian_sysroot_vm_kernel_amd64//:kernel",
+        qemu = "@debian_sysroot_qemu_amd64//:usr/bin/qemu-system-x86_64",
+        machine = ["-machine", "q35"],
+        console = "console=ttyS0",
+    ),
+    "armv7": dict(
+        kernel = "@debian_sysroot_vm_kernel_armhf//:kernel",
+        qemu = "@debian_sysroot_qemu_amd64//:usr/bin/qemu-system-arm",
+        # The Raspberry Pi 2's CPU.
+        machine = ["-machine", "virt", "-cpu", "cortex-a7"],
+        console = "console=ttyAMA0",
+    ),
+}
+
+[
+    platform_transition_filegroup(
+        name = "guest_" + arch,
+        srcs = [
+            ":guest_init",
+            "//:wait-listen",
+        ],
+        target_platform = "//platforms:linux_" + arch,
+    )
+    for arch in _ARCHES
+]
+
+[
+    genrule(
+        name = "initramfs_" + arch,
+        srcs = [":guest_" + arch],
+        outs = ["initramfs_%s.cpio" % arch],
+        cmd = """
+            for f in $(execpaths :guest_{arch}); do
+              case $$f in
+                */guest_init) init=$$f ;;
+                */wait-listen) wl=$$f ;;
+              esac
+            done
+            $(execpath :mkcpio) $@ init=$$init wait-listen=$$wl
+        """.format(arch = arch),
+        tools = [":mkcpio"],
+    )
+    for arch in _ARCHES
+]
+
+# armv7 runs twice: with the kernel's BPF JIT (wl.jit=1; Debian's armmp
+# default is off), and without it (wl.jit=0), as on Raspberry Pi kernels,
+# which have none.
+_TESTS = {
+    "x86_64": ("x86_64", ""),
+    "armv7_jit": ("armv7", "wl.jit=1"),
+    "armv7_nojit": ("armv7", "wl.jit=0"),
+}
+
+[
+    sh_test(
+        name = "vm_test_" + name,
+        size = "large",
+        srcs = ["run_vm_test.sh"],
+        args = [
+            "$(rootpath @debian_sysroot_qemu_amd64//:dynamic_loader)",
+            "$(rootpath %s)" % _ARCHES[arch]["qemu"],
+            "$(rootpath %s)" % _ARCHES[arch]["kernel"],
+            "$(rootpath :initramfs_%s)" % arch,
+        ] + _ARCHES[arch]["machine"] + [
+            "--",
+            _ARCHES[arch]["console"],
+            extra,
+        ],
+        data = [
+            _ARCHES[arch]["kernel"],
+            _ARCHES[arch]["qemu"],
+            ":initramfs_" + arch,
+            "@debian_sysroot_qemu_amd64//:dynamic_loader",
+            "@debian_sysroot_qemu_amd64//:sysroot",
+        ],
+    )
+    for name, (arch, extra) in _TESTS.items()
+]

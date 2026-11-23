@@ -231,7 +231,36 @@ int main(void) {
   if (mount("proc", "/proc", "proc", 0, NULL))
     fatal("mount /proc");
   mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);
-  say("WAIT-LISTEN-VM-TESTS: start\n");
+
+  // wl.jit=0 / wl.jit=1 on the kernel command line: BPF in the interpreter
+  // (as on kernels without a BPF JIT, like Raspberry Pi kernels) or JITed;
+  // otherwise the kernel's default (Debian's armmp: off).
+  char cmdline[1024] = "";
+  FILE *f = fopen("/proc/cmdline", "r");
+  if (f) {
+    if (!fgets(cmdline, sizeof(cmdline), f))
+      cmdline[0] = '\0';
+    fclose(f);
+  }
+  const char *jit_want = strstr(cmdline, "wl.jit=0") ? "0" : strstr(cmdline, "wl.jit=1") ? "1" : NULL;
+  if (jit_want) {
+    f = fopen("/proc/sys/net/core/bpf_jit_enable", "w");
+    if (!f || fputs(jit_want, f) < 0 || fclose(f))
+      fatal("setting bpf_jit_enable");
+  }
+  char jit[8] = "none";
+  f = fopen("/proc/sys/net/core/bpf_jit_enable", "r");
+  if (f) {
+    if (!fgets(jit, sizeof(jit), f))
+      strcpy(jit, "?");
+    fclose(f);
+    jit[strcspn(jit, "\n")] = '\0';
+  }
+  say("\nWAIT-LISTEN-VM-TESTS: start (bpf_jit_enable=%s)\n", jit);
+  if (jit_want && strcmp(jit, jit_want)) {
+    errno = EINVAL;
+    fatal("bpf_jit_enable didn't take");
+  }
 
   {  // the process listens after wait-listen is watching: the event path
     struct helper h = helper_start();

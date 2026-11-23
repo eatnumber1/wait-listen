@@ -68,12 +68,18 @@ See [DESIGN.md](DESIGN.md).
 
 ## Building
 
-Bazel, hermetic: every input is pinned, including the compiler and libbpf.
+Bazel, hermetic: every input is pinned, including the compiler, the
+sysroots (Debian packages by SHA-256, `third_party/debian/lock.json`) and
+libbpf.
 
 ```
-bazel build //:wait-listen
-bazel test //...
+bazel build //:wait-listen_x86_64 //:wait-listen_armv7   # static musl binaries
+bazel test //...                                         # unit and VM tests
 ```
+
+The VM tests boot pinned Debian kernels in a pinned QEMU (x86-64, and a
+32-bit Cortex-A7 with and without the BPF JIT) and run every scenario as
+root; nothing on the host needs root.
 
 ## License
 

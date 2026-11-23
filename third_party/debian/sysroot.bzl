@@ -67,6 +67,22 @@ filegroup(
 
 exports_files(glob(["usr/lib/llvm-*/lib/clang/*/lib/linux/*"], allow_empty = True))
 
+# For the test VMs: a kernel image, the dynamic loader, and the binaries, by
+# role rather than by (versioned) file name.
+filegroup(
+    name = "kernel",
+    srcs = glob(["boot/vmlinuz-*"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "dynamic_loader",
+    srcs = glob(["usr/lib/*/ld-linux*.so.*"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(glob(["usr/bin/*"], allow_empty = True))
+
 # The kernel's UAPI headers alone (linux/, asm-generic/, each architecture's
 # asm/), for code that must not see the libc, such as BPF programs.
 filegroup(

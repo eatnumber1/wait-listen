@@ -82,23 +82,26 @@ kernel accepts it.
 
 ## Tests
 
-- Unprivileged unit tests: the "already listening" check (`/proc`
-  fixtures, including IPv6 and other ports), argument parsing.
-- Privileged tests run inside a qemu VM, where root is safe: an x86-64 VM and
-  an armv7 VM with a 32-bit kernel without BTF. Cases:
-  - the process listens after `wait-listen` starts: exit 0;
-  - the process was already listening: exit 0;
-  - the process exits without listening: exit 1;
-  - another process listens on the same port: no exit (then the target
-    listens: exit 0);
-  - the process listens on another port only: no exit (an event, a
-    negative check);
-  - IPv6 and IPv4;
-  - `--timeout` expires: exit 2;
-  - SIGTERM: exit 6;
-  - after every case above, and after SIGKILL, no BPF program named
-    `on_set_state` is loaded and no link is attached (listed by ID through
-    the bpf syscall).
+- `//:listening_test`: the "already listening" check against fixture `/proc`
+  trees (IPv4, IPv6, other port, another process's socket, an established
+  connection, no IPv6 in the namespace, a missing process).
+- `//tests/vm:vm_test_{x86_64,armv7_jit,armv7_nojit}`: a VM per target
+  (QEMU from Debian, run through its own pinned loader and libraries; Debian
+  kernels 6.12, amd64 and armmp-lpae on a Cortex-A7, the Raspberry Pi 2's
+  CPU), booting an initramfs (`tests/vm/mkcpio.c`, reproducible) whose /init
+  is `tests/vm/guest_init.c` and which carries wait-listen, both static musl
+  for that CPU. armv7 runs with the BPF JIT and without (`wl.jit=0`, as on
+  Raspberry Pi kernels). Each scenario, as root, waits only on events (pipes,
+  process exits; `--ready-fd` tells the guest when wait-listen is watching,
+  `--verbose` when it handled a non-matching listen):
+  - the process listens after wait-listen started watching: exit 0;
+  - it was already listening: exit 0, never "ready" (the /proc path);
+  - it exits without listening: exit 1;
+  - another process holds the port, the target listens on another port
+    (an event, handled, still waiting), then on the port over IPv6: exit 0;
+  - `--timeout 1`: exit 2;
+  - SIGTERM: exit 6; SIGKILL: killed;
+  - after each: no BPF link left attached (`BPF_LINK_GET_NEXT_ID`).
 
 ## Teardown
 
