@@ -1,0 +1,8 @@
+{
+  "snapshot": "20261123T084014Z",
+  "suite": "trixie",
+  "packages": {
+    "amd64": ["linux-libc-dev", "musl", "musl-dev"],
+    "armhf": ["linux-libc-dev", "musl", "musl-dev"]
+  }
+}

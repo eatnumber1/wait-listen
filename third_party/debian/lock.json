@@ -1,0 +1,40 @@
+{
+  "packages": {
+    "amd64": {
+      "linux-libc-dev": {
+        "sha256": "8b4848725a2705e5b1612f2135c44300716690ba762368ab87df127e9a5ed416",
+        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/linux/linux-libc-dev_6.12.117-1_all.deb",
+        "version": "6.12.117-1"
+      },
+      "musl": {
+        "sha256": "fd4231e1c189c0ebe01182747f83817593fefa7f6b690c484410646288b60058",
+        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl_1.2.5-3.1~deb13u1_amd64.deb",
+        "version": "1.2.5-3.1~deb13u1"
+      },
+      "musl-dev": {
+        "sha256": "a3f7d47e452129bb65aae201d6c115abf4d5d3efb136b38b7c6b4fa03ec065e9",
+        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl-dev_1.2.5-3.1~deb13u1_amd64.deb",
+        "version": "1.2.5-3.1~deb13u1"
+      }
+    },
+    "armhf": {
+      "linux-libc-dev": {
+        "sha256": "8b4848725a2705e5b1612f2135c44300716690ba762368ab87df127e9a5ed416",
+        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/linux/linux-libc-dev_6.12.117-1_all.deb",
+        "version": "6.12.117-1"
+      },
+      "musl": {
+        "sha256": "e3a3adee81ad494a4c36521377ed078a453bf4a4400e747fe267a569fd8aa420",
+        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl_1.2.5-3.1~deb13u1_armhf.deb",
+        "version": "1.2.5-3.1~deb13u1"
+      },
+      "musl-dev": {
+        "sha256": "db485234c01cb9887da0907f3e47d36d101a3299528afd3bbeb46edd551c8264",
+        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl-dev_1.2.5-3.1~deb13u1_armhf.deb",
+        "version": "1.2.5-3.1~deb13u1"
+      }
+    }
+  },
+  "snapshot": "20261123T084014Z",
+  "suite": "trixie"
+}

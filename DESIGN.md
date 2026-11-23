@@ -51,14 +51,34 @@ kernel accepts it.
 
 ## Build
 
-- Bazel module, hermetic: `toolchains_llvm` provides Clang (for the host
-  binary and for `-target bpf`) with a Debian sysroot per target; libbpf comes
-  from the Bazel Central Registry.
+- Bazel module, hermetic: `toolchains_llvm` provides Clang (for the program
+  and for `-target bpf`); libbpf, elfutils and zlib come from the Bazel
+  Central Registry and are built from source.
+- **libc: musl, linked statically**: one file that runs on any Linux,
+  nothing to resolve at run time, and the program needs nothing static
+  linking handles badly (no NSS, `dlopen` or locales). glibc discourages
+  static linking; llvm-libc isn't a complete libc for 32-bit Arm yet.
+- **Sysroots from Debian**, one per target (`@debian_sysroot_amd64`,
+  `@debian_sysroot_armhf`): `musl-dev` and `linux-libc-dev` (the kernel UAPI
+  headers, with each architecture's `asm/`), from snapshot.debian.org, each
+  `.deb` pinned by URL and SHA-256 in `third_party/debian/lock.json`.
+  `tools/debian_lock.py` writes that file from `lock-request.json`, trusting a
+  hash only through Debian's signed `InRelease` (verified with gpgv against
+  `third_party/debian/keys/`) and the `Packages` index it vouches for;
+  `--check` fails if the lock is stale. The keys came from Ubuntu's
+  `debian-archive-keyring` package, so they are vouched for by Ubuntu's own
+  signed archive. snapshot.debian.org keeps every file forever, so the pins
+  never rot. (Alpine was considered and rejected: its mirrors delete
+  superseded package versions and keep no archive, so it can only be pinned
+  by release branch.)
+- toolchains_llvm only knows glibc targets and takes a sysroot as a
+  repository of files; `third_party/debian/sysroot.bzl` unpacks the pinned
+  packages into such repositories, and the toolchain's per-target flags
+  select musl.
 - The BPF object is compiled once (BPF bytecode is the same for every host
   architecture, and the raw tracepoint has no layout to differ) and
-  embedded in the binary (C23 `#embed`), which is linked statically: one
-  file to install.
-- Targets: `x86_64-linux-gnu` and `armv7-linux-gnueabihf`.
+  embedded in the binary (C23 `#embed`).
+- Targets: `x86_64-linux-musl` and `armv7-linux-musleabihf`.
 
 ## Tests
 

@@ -10,3 +10,8 @@ llvm.toolchain(llvm_version = "20.1.8")
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 
 register_toolchains("@llvm_toolchain//:all")
+
+# Sysroots from pinned Debian packages (third_party/debian/): musl and the
+# kernel UAPI headers, per architecture.
+debian = use_extension("//third_party/debian:sysroot.bzl", "debian_sysroots")
+use_repo(debian, "debian_sysroot_amd64", "debian_sysroot_armhf")
