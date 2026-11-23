@@ -6,19 +6,70 @@
       "arch": "amd64",
       "musl_multiarch": "x86_64-linux-musl",
       "gnu_multiarch": "x86_64-linux-gnu",
-      "packages": ["libclang-rt-19-dev", "linux-libc-dev", "musl", "musl-dev"]
+      "packages": [
+        "libclang-rt-19-dev",
+        "linux-libc-dev",
+        "musl",
+        "musl-dev"
+      ]
     },
     "armhf_musl": {
       "suite": "trixie",
       "arch": "armhf",
       "musl_multiarch": "arm-linux-musleabihf",
       "gnu_multiarch": "arm-linux-gnueabihf",
-      "packages": ["libclang-rt-19-dev", "linux-libc-dev", "musl", "musl-dev"]
+      "packages": [
+        "libclang-rt-19-dev",
+        "linux-libc-dev",
+        "musl",
+        "musl-dev"
+      ]
     },
     "amd64_glibc": {
       "suite": "bookworm",
       "arch": "amd64",
-      "packages": ["libc6", "libc6-dev", "libgcc-12-dev", "libgcc-s1", "linux-libc-dev"]
+      "packages": [
+        "libc6",
+        "libc6-dev",
+        "libgcc-12-dev",
+        "libgcc-s1",
+        "linux-libc-dev"
+      ]
+    },
+    "vm_kernel_amd64": {
+      "suite": "trixie",
+      "arch": "amd64",
+      "meta": [
+        "linux-image-amd64"
+      ],
+      "packages": []
+    },
+    "vm_kernel_armhf": {
+      "suite": "trixie",
+      "arch": "armhf",
+      "meta": [
+        "linux-image-armmp-lpae"
+      ],
+      "packages": []
+    },
+    "qemu_amd64": {
+      "suite": "trixie",
+      "arch": "amd64",
+      "packages": [
+        "qemu-system-arm",
+        "qemu-system-x86"
+      ],
+      "closure": true,
+      "exclude": [
+        "adduser",
+        "debconf",
+        "dpkg",
+        "init-system-helpers",
+        "passwd",
+        "perl-base",
+        "systemd",
+        "systemd-sysv"
+      ]
     }
   }
 }

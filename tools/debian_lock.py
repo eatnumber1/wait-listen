@@ -85,6 +85,50 @@ def packages(base, suite, inrelease, component, arch):
   return out
 
 
+def dependencies(index, name):
+  """Names a package depends on: Pre-Depends and Depends, first alternative,
+  versions and architecture qualifiers dropped; virtual packages resolved to
+  their first provider."""
+  p = index[name]
+  out = []
+  for field in ("Pre-Depends", "Depends"):
+    for clause in p.get(field, "").split(","):
+      clause = clause.strip()
+      if not clause:
+        continue
+      alt = clause.split("|")[0].strip().split()[0].split(":")[0]
+      if alt not in index:
+        providers = sorted(n for n, q in index.items()
+                           if alt in [x.strip().split()[0] for x in q.get("Provides", "").split(",") if x.strip()])
+        if not providers:
+          sys.exit(f"{name} depends on {alt}, which nothing provides")
+        alt = providers[0]
+      out.append(alt)
+  return out
+
+
+def first_dependency(index, meta, suite, arch):
+  if meta not in index:
+    sys.exit(f"{suite}/{arch} has no package {meta}")
+  deps = dependencies(index, meta)
+  if not deps:
+    sys.exit(f"{meta} depends on nothing")
+  return deps[0]
+
+
+def closure(index, names, exclude, suite, arch):
+  todo, seen = list(names), set()
+  while todo:
+    n = todo.pop()
+    if n in seen or n in exclude:
+      continue
+    if n not in index:
+      sys.exit(f"{suite}/{arch} has no package {n}")
+    seen.add(n)
+    todo.extend(dependencies(index, n))
+  return seen
+
+
 def resolve(request):
   """Each sysroot: one suite and architecture from the same snapshot."""
   base = f"https://snapshot.debian.org/archive/debian/{request['snapshot']}"
@@ -97,9 +141,18 @@ def resolve(request):
     if (suite, arch) not in indexes:
       indexes[(suite, arch)] = packages(base, suite, releases[suite], "main", arch)
     index = indexes[(suite, arch)]
-    entry = {k: v for k, v in want.items() if k != "packages"}
+    entry = {k: v for k, v in want.items() if k not in ("packages", "meta", "closure", "exclude")}
     entry["packages"] = {}
-    for pkg in sorted(want["packages"]):
+    names = set(want["packages"])
+    # "meta": metapackages (linux-image-amd64) stand for the one package they
+    # depend on (linux-image-6.12.N+deb13-amd64), which is what's locked.
+    for meta in want.get("meta", []):
+      names.add(first_dependency(index, meta, suite, arch))
+    # "closure": everything the packages depend on, transitively (first
+    # alternative of each), except "exclude" (and what only they pull in).
+    if want.get("closure"):
+      names = closure(index, names, set(want.get("exclude", [])), suite, arch)
+    for pkg in sorted(names):
       if pkg not in index:
         sys.exit(f"{suite}/{arch} has no package {pkg}")
       p = index[pkg]

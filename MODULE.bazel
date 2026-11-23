@@ -10,7 +10,15 @@ bazel_dep(name = "toolchains_llvm", version = "1.13.0")
 # what we ship, amd64_glibc (bookworm: glibc 2.36, old enough to run on the
 # build host) for tools that run during the build.
 debian = use_extension("//third_party/debian:sysroot.bzl", "debian_sysroots")
-use_repo(debian, "debian_sysroot_amd64_glibc", "debian_sysroot_amd64_musl", "debian_sysroot_armhf_musl")
+use_repo(
+    debian,
+    "debian_sysroot_amd64_glibc",
+    "debian_sysroot_amd64_musl",
+    "debian_sysroot_armhf_musl",
+    "debian_sysroot_qemu_amd64",
+    "debian_sysroot_vm_kernel_amd64",
+    "debian_sysroot_vm_kernel_armhf",
+)
 
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
 
