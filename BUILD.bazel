@@ -83,3 +83,14 @@ cc_test(
     ],
     deps = [":listening"],
 )
+
+# PID 1 of the test VMs (tests/vm/): static, like wait-listen itself.
+cc_binary(
+    name = "guest_init",
+    srcs = ["tests/vm/guest_init.c"],
+    copts = [
+        "-Wall",
+        "-Werror",
+    ],
+    linkstatic = True,
+)

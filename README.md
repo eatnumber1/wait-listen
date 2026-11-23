@@ -10,8 +10,13 @@ event: a tiny eBPF program, compiled into the binary, watches the kernel's
 process puts a socket on the given port into the listening state.
 
 ```
-wait-listen --pid PID --port PORT [--timeout SECONDS]
+wait-listen --pid PID --port PORT [--timeout SECONDS] [--ready-fd FD] [--verbose]
 ```
+
+`--ready-fd FD` writes one byte to file descriptor FD, then closes it, once
+the program is attached and the process isn't already listening: from then
+on, a `listen()` can't be missed. `--verbose` also reports each `listen()` by
+the process that wasn't on the port.
 
 Typical use, in a systemd unit for a daemon that can't notify:
 

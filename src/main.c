@@ -40,6 +40,7 @@ static const unsigned char bpf_object_bytes[] = {
 };
 
 static int verbose;
+static int ready_fd = -1;  // --ready-fd: one byte once attached and checked
 
 static int libbpf_log(enum libbpf_print_level level, const char *fmt, va_list ap) {
   if (level == LIBBPF_DEBUG && !verbose)
@@ -51,7 +52,8 @@ static int libbpf_log(enum libbpf_print_level level, const char *fmt, va_list ap
 
 static void usage(FILE *f) {
   fprintf(f,
-          "usage: wait-listen --pid PID --port PORT [--timeout SECONDS] [--verbose]\n"
+          "usage: wait-listen --pid PID --port PORT [--timeout SECONDS] [--ready-fd FD]\n"
+          "                   [--verbose]\n"
           "Exit: 0 listening, 1 process gone, 2 timeout, 3 usage, 4 kernel can't, 5 error,\n"
           "6 stopped by a signal.\n");
 }
@@ -172,6 +174,15 @@ static int run(struct state *st, pid_t pid, unsigned port, unsigned long timeout
   if (r != 0)
     return r == 1 ? EXIT_LISTENING : r == -1 ? EXIT_GONE : EXIT_ERROR;
 
+  // Watching: tell whoever asked (a byte, then EOF), e.g. a test that only
+  // then makes the process listen, so the event path is what it exercises.
+  if (ready_fd >= 0) {
+    if (write(ready_fd, "r", 1) != 1)
+      goto fail;
+    close(ready_fd);
+    ready_fd = -1;
+  }
+
   // 4. Wait for the first of: a listen() by the process, its exit, the
   // timeout, a signal.
   st->ep = epoll_create1(EPOLL_CLOEXEC);
@@ -211,6 +222,8 @@ static int run(struct state *st, pid_t pid, unsigned port, unsigned long timeout
     r = check(pid, port);
     if (r != 0)
       return r == 1 ? EXIT_LISTENING : r == -1 ? EXIT_GONE : EXIT_ERROR;
+    if (verbose)
+      fprintf(stderr, "wait-listen: pid %d listened, but not on port %u yet\n", (int)pid, port);
   }
 
 fail:
@@ -224,6 +237,7 @@ int main(int argc, char **argv) {
       {"port", required_argument, NULL, 'P'},
       {"timeout", required_argument, NULL, 't'},
       {"verbose", no_argument, NULL, 'v'},
+      {"ready-fd", required_argument, NULL, 'r'},
       {"help", no_argument, NULL, 'h'},
       {0},
   };
@@ -248,6 +262,13 @@ int main(int argc, char **argv) {
       case 'v':
         verbose = 1;
         break;
+      case 'r': {
+        unsigned long fd;
+        if (parse_uint(optarg, INT_MAX, &fd))
+          goto bad;
+        ready_fd = (int)fd;
+        break;
+      }
       case 'h':
         usage(stdout);
         return EXIT_LISTENING;
