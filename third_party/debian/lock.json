@@ -1,40 +1,92 @@
 {
-  "packages": {
-    "amd64": {
-      "linux-libc-dev": {
-        "sha256": "8b4848725a2705e5b1612f2135c44300716690ba762368ab87df127e9a5ed416",
-        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/linux/linux-libc-dev_6.12.117-1_all.deb",
-        "version": "6.12.117-1"
-      },
-      "musl": {
-        "sha256": "fd4231e1c189c0ebe01182747f83817593fefa7f6b690c484410646288b60058",
-        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl_1.2.5-3.1~deb13u1_amd64.deb",
-        "version": "1.2.5-3.1~deb13u1"
-      },
-      "musl-dev": {
-        "sha256": "a3f7d47e452129bb65aae201d6c115abf4d5d3efb136b38b7c6b4fa03ec065e9",
-        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl-dev_1.2.5-3.1~deb13u1_amd64.deb",
-        "version": "1.2.5-3.1~deb13u1"
-      }
-    },
-    "armhf": {
-      "linux-libc-dev": {
-        "sha256": "8b4848725a2705e5b1612f2135c44300716690ba762368ab87df127e9a5ed416",
-        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/linux/linux-libc-dev_6.12.117-1_all.deb",
-        "version": "6.12.117-1"
-      },
-      "musl": {
-        "sha256": "e3a3adee81ad494a4c36521377ed078a453bf4a4400e747fe267a569fd8aa420",
-        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl_1.2.5-3.1~deb13u1_armhf.deb",
-        "version": "1.2.5-3.1~deb13u1"
-      },
-      "musl-dev": {
-        "sha256": "db485234c01cb9887da0907f3e47d36d101a3299528afd3bbeb46edd551c8264",
-        "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl-dev_1.2.5-3.1~deb13u1_armhf.deb",
-        "version": "1.2.5-3.1~deb13u1"
-      }
-    }
-  },
   "snapshot": "20261123T084014Z",
-  "suite": "trixie"
+  "sysroots": {
+    "amd64_glibc": {
+      "arch": "amd64",
+      "packages": {
+        "libc6": {
+          "sha256": "ba4f88f73dbc3ae9055f3c20f4523bfdbaf1ad13ff95e258924f77d20b4fbedf",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/g/glibc/libc6_2.36-9+deb12u14_amd64.deb",
+          "version": "2.36-9+deb12u14"
+        },
+        "libc6-dev": {
+          "sha256": "0218fc2befcd784c1b0c6292c0a137ce89fad054efaa579ad083bee0f2c01aae",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/g/glibc/libc6-dev_2.36-9+deb12u14_amd64.deb",
+          "version": "2.36-9+deb12u14"
+        },
+        "libgcc-12-dev": {
+          "sha256": "d720259380a84f2ffc6fe516eff5cbe9c8a005138e8d6a5748747ba4b3404a82",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/g/gcc-12/libgcc-12-dev_12.2.0-14+deb12u1_amd64.deb",
+          "version": "12.2.0-14+deb12u1"
+        },
+        "libgcc-s1": {
+          "sha256": "3016e62cb4b7cd8038822870601f5ed131befe942774d0f745622cc77d8a88f7",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/g/gcc-12/libgcc-s1_12.2.0-14+deb12u1_amd64.deb",
+          "version": "12.2.0-14+deb12u1"
+        },
+        "linux-libc-dev": {
+          "sha256": "8bb258735b9dffbb111da778ebdd024750878e435ffd9dfcadcb6762ede6b4cf",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/linux/linux-libc-dev_6.1.176-1_amd64.deb",
+          "version": "6.1.176-1"
+        }
+      },
+      "suite": "bookworm"
+    },
+    "amd64_musl": {
+      "arch": "amd64",
+      "gnu_multiarch": "x86_64-linux-gnu",
+      "musl_multiarch": "x86_64-linux-musl",
+      "packages": {
+        "libclang-rt-19-dev": {
+          "sha256": "0c03a0a8fa37228e2de6c36d02ff0806643885c515a8137d1bcd22e248497cd6",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/llvm-toolchain-19/libclang-rt-19-dev_19.1.7-3+b1_amd64.deb",
+          "version": "1:19.1.7-3+b1"
+        },
+        "linux-libc-dev": {
+          "sha256": "8b4848725a2705e5b1612f2135c44300716690ba762368ab87df127e9a5ed416",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/linux/linux-libc-dev_6.12.117-1_all.deb",
+          "version": "6.12.117-1"
+        },
+        "musl": {
+          "sha256": "fd4231e1c189c0ebe01182747f83817593fefa7f6b690c484410646288b60058",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl_1.2.5-3.1~deb13u1_amd64.deb",
+          "version": "1.2.5-3.1~deb13u1"
+        },
+        "musl-dev": {
+          "sha256": "a3f7d47e452129bb65aae201d6c115abf4d5d3efb136b38b7c6b4fa03ec065e9",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl-dev_1.2.5-3.1~deb13u1_amd64.deb",
+          "version": "1.2.5-3.1~deb13u1"
+        }
+      },
+      "suite": "trixie"
+    },
+    "armhf_musl": {
+      "arch": "armhf",
+      "gnu_multiarch": "arm-linux-gnueabihf",
+      "musl_multiarch": "arm-linux-musleabihf",
+      "packages": {
+        "libclang-rt-19-dev": {
+          "sha256": "c94a5f9ab4e93b0cc63eb506acad36d4e7b73785c9856fbdeb62774f54f8cef8",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/llvm-toolchain-19/libclang-rt-19-dev_19.1.7-3+b1_armhf.deb",
+          "version": "1:19.1.7-3+b1"
+        },
+        "linux-libc-dev": {
+          "sha256": "8b4848725a2705e5b1612f2135c44300716690ba762368ab87df127e9a5ed416",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/l/linux/linux-libc-dev_6.12.117-1_all.deb",
+          "version": "6.12.117-1"
+        },
+        "musl": {
+          "sha256": "e3a3adee81ad494a4c36521377ed078a453bf4a4400e747fe267a569fd8aa420",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl_1.2.5-3.1~deb13u1_armhf.deb",
+          "version": "1.2.5-3.1~deb13u1"
+        },
+        "musl-dev": {
+          "sha256": "db485234c01cb9887da0907f3e47d36d101a3299528afd3bbeb46edd551c8264",
+          "url": "https://snapshot.debian.org/archive/debian/20261123T084014Z/pool/main/m/musl/musl-dev_1.2.5-3.1~deb13u1_armhf.deb",
+          "version": "1.2.5-3.1~deb13u1"
+        }
+      },
+      "suite": "trixie"
+    }
+  }
 }

@@ -1,0 +1,29 @@
+# Target platforms for what we ship: static musl binaries. The musl
+# constraint selects the llvm_musl toolchain (MODULE.bazel); the exec
+# platform lacks it, so tools that run during the build use glibc.
+package(default_visibility = ["//visibility:public"])
+
+constraint_setting(name = "libc")
+
+constraint_value(
+    name = "musl",
+    constraint_setting = ":libc",
+)
+
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        ":musl",
+    ],
+)
+
+platform(
+    name = "linux_armv7",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:armv7",
+        ":musl",
+    ],
+)

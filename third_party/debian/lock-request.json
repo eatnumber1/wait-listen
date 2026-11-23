@@ -1,8 +1,24 @@
 {
   "snapshot": "20261123T084014Z",
-  "suite": "trixie",
-  "packages": {
-    "amd64": ["linux-libc-dev", "musl", "musl-dev"],
-    "armhf": ["linux-libc-dev", "musl", "musl-dev"]
+  "sysroots": {
+    "amd64_musl": {
+      "suite": "trixie",
+      "arch": "amd64",
+      "musl_multiarch": "x86_64-linux-musl",
+      "gnu_multiarch": "x86_64-linux-gnu",
+      "packages": ["libclang-rt-19-dev", "linux-libc-dev", "musl", "musl-dev"]
+    },
+    "armhf_musl": {
+      "suite": "trixie",
+      "arch": "armhf",
+      "musl_multiarch": "arm-linux-musleabihf",
+      "gnu_multiarch": "arm-linux-gnueabihf",
+      "packages": ["libclang-rt-19-dev", "linux-libc-dev", "musl", "musl-dev"]
+    },
+    "amd64_glibc": {
+      "suite": "bookworm",
+      "arch": "amd64",
+      "packages": ["libc6", "libc6-dev", "libgcc-12-dev", "libgcc-s1", "linux-libc-dev"]
+    }
   }
 }

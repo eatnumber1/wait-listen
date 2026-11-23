@@ -86,21 +86,29 @@ def packages(base, suite, inrelease, component, arch):
 
 
 def resolve(request):
+  """Each sysroot: one suite and architecture from the same snapshot."""
   base = f"https://snapshot.debian.org/archive/debian/{request['snapshot']}"
-  inrelease = verified_inrelease(base, request["suite"])
-  lock = {"snapshot": request["snapshot"], "suite": request["suite"], "packages": {}}
-  for arch, names in sorted(request["packages"].items()):
-    index = packages(base, request["suite"], inrelease, "main", arch)
-    lock["packages"][arch] = {}
-    for name in sorted(names):
-      if name not in index:
-        sys.exit(f"{request['suite']}/{arch} has no package {name}")
-      p = index[name]
-      lock["packages"][arch][name] = {
+  releases, indexes = {}, {}
+  lock = {"snapshot": request["snapshot"], "sysroots": {}}
+  for name, want in sorted(request["sysroots"].items()):
+    suite, arch = want["suite"], want["arch"]
+    if suite not in releases:
+      releases[suite] = verified_inrelease(base, suite)
+    if (suite, arch) not in indexes:
+      indexes[(suite, arch)] = packages(base, suite, releases[suite], "main", arch)
+    index = indexes[(suite, arch)]
+    entry = {k: v for k, v in want.items() if k != "packages"}
+    entry["packages"] = {}
+    for pkg in sorted(want["packages"]):
+      if pkg not in index:
+        sys.exit(f"{suite}/{arch} has no package {pkg}")
+      p = index[pkg]
+      entry["packages"][pkg] = {
           "version": p["Version"],
           "url": f"{base}/{p['Filename']}",
           "sha256": p["SHA256"],
       }
+    lock["sysroots"][name] = entry
   return lock
 
 

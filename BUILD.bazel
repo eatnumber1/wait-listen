@@ -19,11 +19,11 @@ genrule(
             */src/bpf_helpers.h|*/src/bpf_helper_defs.h) cp $$f $$inc/bpf/ ;;
           esac
         done
-        $(execpath @llvm_toolchain_llvm//:bin/clang) -target bpf -O2 -g -Wall -Werror \
+        $(execpath @llvm_musl_llvm//:bin/clang) -target bpf -O2 -g -Wall -Werror \
           -nostdinc -I$$inc -I$$(dirname $(location src/bpf_types.h)) \
           -c $(location src/wait_listen.bpf.c) -o $@
     """,
-    tools = ["@llvm_toolchain_llvm//:bin/clang"],
+    tools = ["@llvm_musl_llvm//:bin/clang"],
 )
 
 # Makes the object an input of the compile that #embeds it.
@@ -64,6 +64,8 @@ cc_binary(
 cc_test(
     name = "listening_test",
     srcs = ["tests/listening_test.c"],
+    # Static musl: no shared libraries, so link the dependencies in.
+    linkstatic = True,
     copts = [
         "-Wall",
         "-Werror",

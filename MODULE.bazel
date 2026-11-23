@@ -5,13 +5,111 @@ bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "libbpf", version = "1.7.0.bcr.2")
 bazel_dep(name = "toolchains_llvm", version = "1.13.0")
 
-llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
-llvm.toolchain(llvm_version = "20.1.8")
-use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
-
-register_toolchains("@llvm_toolchain//:all")
-
-# Sysroots from pinned Debian packages (third_party/debian/): musl and the
-# kernel UAPI headers, per architecture.
+# Sysroots from pinned Debian packages (third_party/debian/lock.json):
+# amd64_musl, armhf_musl (trixie: musl, kernel UAPI headers, compiler-rt) for
+# what we ship, amd64_glibc (bookworm: glibc 2.36, old enough to run on the
+# build host) for tools that run during the build.
 debian = use_extension("//third_party/debian:sysroot.bzl", "debian_sysroots")
-use_repo(debian, "debian_sysroot_amd64", "debian_sysroot_armhf")
+use_repo(debian, "debian_sysroot_amd64_glibc", "debian_sysroot_amd64_musl", "debian_sysroot_armhf_musl")
+
+llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
+
+# Toolchain 1, llvm_musl: what we ship. Static musl binaries, for target
+# platforms carrying //platforms:musl (//platforms:linux_x86_64,
+# //platforms:linux_armv7). toolchains_llvm only knows glibc targets, so the
+# per-target compile and link flags are replaced (its defaults, with the musl
+# triple), and Debian's compiler-rt (builtins, crtbegin/crtend) is laid into
+# the LLVM distribution where Clang looks for the musl triples. No C++.
+_RT = "usr/lib/llvm-19/lib/clang/19/lib/linux/"
+
+_MUSL = {
+    "linux-x86_64": ("x86_64-unknown-linux-musl", "amd64_musl", "x86_64"),
+    "linux-armv7": ("armv7-unknown-linux-musleabihf", "armhf_musl", "armhf"),
+}
+
+llvm.toolchain(
+    name = "llvm_musl",
+    compile_flags = {
+        key: [
+            "--target=" + triple,
+            "-U_FORTIFY_SOURCE",
+            "-fstack-protector-strong",
+            "-fno-omit-frame-pointer",
+            "-fcolor-diagnostics",
+            "-Wall",
+            "-B{toolchain_path_prefix}bin/",
+            "-resource-dir",
+            "{toolchain_path_prefix}lib/clang/20",
+        ]
+        for key, (triple, _, _) in _MUSL.items()
+    },
+    libclang_rt = {
+        "@debian_sysroot_%s//:%s%s" % (sysroot, _RT, deb): "%s/%s" % (triple, name)
+        for (triple, sysroot, rt) in _MUSL.values()
+        for deb, name in [
+            ("libclang_rt.builtins-%s.a" % rt, "libclang_rt.builtins.a"),
+            ("clang_rt.crtbegin-%s.o" % rt, "clang_rt.crtbegin.o"),
+            ("clang_rt.crtend-%s.o" % rt, "clang_rt.crtend.o"),
+        ]
+    },
+    link_flags = {
+        key: [
+            "--target=" + triple,
+            "-no-canonical-prefixes",
+            "-fuse-ld=lld",
+            "-resource-dir",
+            "{toolchain_path_prefix}lib/clang/20",
+            "-static",
+            "--rtlib=compiler-rt",
+            "--unwindlib=none",
+        ]
+        for key, (triple, _, _) in _MUSL.items()
+    },
+    link_libs = {key: [] for key in _MUSL},
+    llvm_version = "20.1.8",
+    # C only: neither a C++ library nor C++ headers (toolchains_llvm otherwise
+    # falls back to libstdc++ when cross-compiling).
+    stdlib = {key: "libc" for key in _MUSL},
+)
+
+[
+    llvm.sysroot(
+        name = "llvm_musl",
+        label = "@debian_sysroot_%s//:sysroot" % sysroot,
+        targets = [key],
+    )
+    for key, (_, sysroot, _) in _MUSL.items()
+]
+
+llvm.extra_target_compatible_with(
+    name = "llvm_musl",
+    constraints = ["//platforms:musl"],
+)
+
+# Toolchain 2, llvm_toolchain: tools that run during the build (the exec
+# platform, without //platforms:musl), e.g. GNU m4 for elfutils, whose
+# prepared config.h assumes glibc. glibc from the bookworm sysroot; the same
+# LLVM distribution as llvm_musl.
+llvm.toolchain(
+    name = "llvm_toolchain",
+    llvm_version = "20.1.8",
+)
+
+llvm.toolchain_root(
+    name = "llvm_toolchain",
+    label = "@llvm_musl_llvm//:BUILD.bazel",
+)
+
+llvm.sysroot(
+    name = "llvm_toolchain",
+    label = "@debian_sysroot_amd64_glibc//:sysroot",
+    targets = ["linux-x86_64"],
+)
+
+use_repo(llvm, "llvm_musl", "llvm_musl_llvm", "llvm_toolchain")
+
+# Order matters: for a musl target platform both match, and the first wins.
+register_toolchains(
+    "@llvm_musl//:all",
+    "@llvm_toolchain//:all",
+)

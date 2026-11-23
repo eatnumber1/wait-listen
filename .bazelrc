@@ -1,0 +1,2 @@
+# What we ship is static musl (MODULE.bazel, platforms/BUILD.bazel).
+build --platforms=//platforms:linux_x86_64
