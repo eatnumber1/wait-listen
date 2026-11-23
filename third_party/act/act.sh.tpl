@@ -5,9 +5,13 @@
 #   bazel run //third_party/act -- -j release --eventpath <event.json>
 #
 # Arguments after `--` go to act. It needs a container engine: Docker (a
-# shell in the `docker` group) or rootless Podman (WL_ACT_PODMAN=1, which
-# points act at the user's Podman socket). act only creates containers and
-# volumes of its own (label wait-listen.owner=act) and removes them.
+# shell in the `docker` group, or DOCKER_HOST pointing at a rootless Docker)
+# or rootless Podman (WL_ACT_PODMAN=1, which points act at the user's Podman
+# socket). With WL_ACT_DOCKER_UNIT=<systemd user unit> (e.g. a rootless
+# dockerd), the engine runs only for the duration: the unit is started first
+# (systemctl returns once a Type=notify daemon is ready) and stopped when act
+# exits. act only creates containers and volumes of its own (label
+# wait-listen.owner=act) and removes them.
 set -euo pipefail
 
 # --- begin runfiles.bash initialization v3 ---
@@ -32,6 +36,10 @@ REPO="${BUILD_WORKSPACE_DIRECTORY:-$PWD}"
 STATE="${WL_ACT_STATE:-$REPO/.act}"
 mkdir -p "$STATE/actions" "$STATE/cache" "$STATE/artifacts"
 
+if [ -n "${WL_ACT_DOCKER_UNIT:-}" ]; then
+	systemctl --user start "$WL_ACT_DOCKER_UNIT"
+	trap 'systemctl --user stop "$WL_ACT_DOCKER_UNIT"' EXIT
+fi
 if [ -n "${WL_ACT_PODMAN:-}" ]; then
 	export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
 fi
@@ -45,7 +53,8 @@ fi
 OPTS="--label wait-listen.owner=act --memory ${WL_ACT_MEMORY:-6g}"
 
 cd "$REPO"
-exec "$ACT" \
+# Not exec: the EXIT trap stops a WL_ACT_DOCKER_UNIT afterwards.
+"$ACT" \
 	--platform "ubuntu-latest=$IMAGE" \
 	--platform "ubuntu-24.04=$IMAGE" \
 	--container-architecture linux/amd64 \

@@ -16,13 +16,34 @@ rules.
 ## Steps
 
 1. Open a pidfd for `--pid`. The process exiting is then an event too.
-2. Load and attach the BPF program to the *raw* tracepoint
-   `inet_sock_set_state`. A raw tracepoint gets the tracepoint's arguments
-   as an array of 64-bit values (`sk`, `oldstate`, `newstate`), whatever the
-   kernel's architecture, so the program depends on no kernel struct
-   layout, needs no BTF and no tracefs. It passes on an event (through a BPF
-   ring buffer) only when `newstate` is `TCP_LISTEN` (10) and the calling
-   thread belongs to `--pid` (its thread group id).
+2. Load and attach two BPF programs to *raw* tracepoints (arguments as an
+   array of `u64` on every architecture, so no kernel struct layout, no BTF,
+   no tracefs):
+   - `inet_sock_set_state`: when `newstate` is `TCP_LISTEN` (10) and the
+     calling thread belongs to `--pid` (thread group id), remember the thread
+     (a hash map, `pending`).
+   - `sys_exit`: when a remembered thread's system call returns, forget it and
+     pass on an event (a BPF ring buffer).
+
+   Why two: `inet_sock_set_state` fires in `inet_csk_listen_start()` when the
+   state is set, *before* the socket is hashed into the listening table;
+   until then neither `/proc/net/tcp` nor a connecting client can see it.
+   Reporting at the state change let user space check in that gap, find
+   nothing and wait forever (the VM tests hung so on kernel 7.3, one CPU,
+   in up to 7 runs of 10). The thread's next system call return is its
+   `listen()`'s, after the hashing. `sys_exit` is attached first, so no
+   remembered thread's return can be missed. Threads pair up by thread id,
+   so threads listening at once don't interfere (a thread is in one system
+   call at a time), and a spurious report only costs a re-check. A
+   `listen()` already in progress at attach time set its state before
+   `on_set_state` was there: so, after attaching and before the check of
+   step 3, user space notes *every* existing thread of the process
+   (`/proc/PID/task`) in `pending`; whichever is inside `listen()` reports
+   on its return, and one that returned before it was noted has its socket
+   hashed already, for step 3 to find. Not covered: io_uring's
+   `IORING_OP_LISTEN` run on an io_uring worker, which never returns to user
+   space (README, Limitations). While attached, the `sys_exit`
+   program runs on every system call return on the machine (one hash lookup).
 3. Only after attaching, check whether the process listens on `--port`:
    read its `/proc/PID/net/tcp` and `tcp6` (its own network namespace) for
    `LISTEN` entries on the port, and match their inodes against the

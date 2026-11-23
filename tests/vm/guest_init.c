@@ -6,11 +6,14 @@
 // clock is the one --timeout itself is tested against.
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
 #include <linux/bpf.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +55,21 @@ struct helper {
   int ack;  // read: one byte per command done
 };
 
+#define THREADS 8
+static pthread_barrier_t barrier;
+
+// One of THREADS threads that all listen at once: thread i on port + i - 7,
+// so the last one is on the port itself.
+static void *listen_thread(void *arg) {
+  unsigned short port = (unsigned short)(uintptr_t)arg;
+  pthread_barrier_wait(&barrier);
+  int s = socket(AF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port)};
+  if (s < 0 || bind(s, (struct sockaddr *)&a, sizeof(a)) || listen(s, 1))
+    _exit(3);
+  return NULL;
+}
+
 static void helper_main(int cmd, int ack) {
   for (;;) {
     char op;
@@ -62,6 +80,18 @@ static void helper_main(int cmd, int ack) {
       _exit(0);
     if (read(cmd, &port, sizeof(port)) != sizeof(port))
       _exit(2);
+    if (op == 't') {  // THREADS threads listen at once
+      pthread_t t[THREADS];
+      pthread_barrier_init(&barrier, NULL, THREADS);
+      for (int i = 0; i < THREADS; i++)
+        if (pthread_create(&t[i], NULL, listen_thread, (void *)(uintptr_t)(port + i - (THREADS - 1))))
+          _exit(5);
+      for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], NULL);
+      if (write(ack, "k", 1) != 1)
+        _exit(4);
+      continue;
+    }
     int s;
     if (op == '6') {
       s = socket(AF_INET6, SOCK_STREAM, 0);
@@ -124,14 +154,19 @@ static void helper_stop(struct helper *h) {
 struct wl {
   pid_t pid;
   int ready;  // read: one byte when watching, EOF on exit
-  int err;    // read: its stderr (--verbose)
+  int err;    // read: its stderr (--verbose), echoed to the console
+  char buf[4096];
+  size_t len;
+  int eof;
+  int seen;  // lines echoed so far
+  char last[256];  // the last line, for wl_saw
 };
 
 static struct wl wl_start(pid_t target, unsigned short port, const char *timeout) {
   int r[2], e[2];
   if (pipe(r) || pipe(e))
     fatal("pipe");
-  struct wl w = {.ready = r[0], .err = e[0]};
+  struct wl w = {.ready = r[0], .err = e[0], .len = 0, .eof = 0, .seen = 0};
   w.pid = fork();
   if (w.pid < 0)
     fatal("fork");
@@ -159,37 +194,73 @@ static struct wl wl_start(pid_t target, unsigned short port, const char *timeout
   return w;
 }
 
+// Reads what is available on its stderr and echoes whole lines to the
+// console (so a hang shows how far wait-listen got). Blocks only if asked.
+static void wl_pump(struct wl *w) {
+  ssize_t n = read(w->err, w->buf + w->len, sizeof(w->buf) - 1 - w->len);
+  if (n <= 0) {
+    w->eof = 1;
+    return;
+  }
+  w->len += (size_t)n;
+  w->buf[w->len] = '\0';
+  char *nl;
+  while ((nl = strchr(w->buf, '\n'))) {
+    *nl = '\0';
+    say("  | %s\n", w->buf);
+    snprintf(w->last, sizeof(w->last), "%s", w->buf);
+    w->seen++;
+    memmove(w->buf, nl + 1, w->len - (size_t)(nl + 1 - w->buf) + 1);
+    w->len = strlen(w->buf);
+  }
+}
+
+// Waits for fd to be readable, echoing stderr meanwhile; 0 when it is, -1
+// if stderr hit EOF first (only when fd isn't stderr itself).
+static int wl_wait_fd(struct wl *w, int fd) {
+  for (;;) {
+    struct pollfd p[2] = {{.fd = fd, .events = POLLIN}, {.fd = w->err, .events = POLLIN}};
+    int n = fd == w->err || w->eof ? 1 : 2;
+    if (poll(p, (nfds_t)n, -1) < 0) {
+      if (errno == EINTR)
+        continue;
+      fatal("poll");
+    }
+    if (n == 2 && p[1].revents)
+      wl_pump(w);
+    if (p[0].revents)
+      return 0;
+  }
+}
+
 // 1 if it signalled ready, 0 if it closed the fd without (exited first).
 static int wl_ready(struct wl *w) {
+  wl_wait_fd(w, w->ready);
   char b;
   ssize_t n = read(w->ready, &b, 1);
   return n == 1;
 }
 
-// Reads stderr until a line containing needle; 1 if found, 0 at EOF.
+// Echoes stderr until a line containing needle; 1 if found, 0 at EOF.
 static int wl_saw(struct wl *w, const char *needle) {
-  static char buf[4096];
-  static size_t len;
   for (;;) {
-    buf[len] = '\0';
-    char *nl;
-    while ((nl = strchr(buf, '\n'))) {
-      *nl = '\0';
-      int hit = strstr(buf, needle) != NULL;
-      memmove(buf, nl + 1, len - (size_t)(nl + 1 - buf) + 1);
-      len = strlen(buf);
-      if (hit)
-        return 1;
-    }
-    ssize_t n = read(w->err, buf + len, sizeof(buf) - 1 - len);
-    if (n <= 0)
+    int before = w->seen;
+    if (w->eof)
       return 0;
-    len += (size_t)n;
+    wl_wait_fd(w, w->err);
+    wl_pump(w);
+    if (w->seen != before && strstr(w->last, needle))
+      return 1;
   }
 }
 
-// Exit status, or 100 + signal.
+// Exit status, or 100 + signal. Echoes the rest of its stderr first (EOF
+// when it exits).
 static int wl_wait(struct wl *w) {
+  while (!w->eof) {
+    wl_wait_fd(w, w->err);
+    wl_pump(w);
+  }
   int st;
   if (waitpid(w->pid, &st, 0) < 0)
     fatal("waitpid");
@@ -338,15 +409,30 @@ int main(void) {
     int ready = wl_ready(&w);
     int saw = 0;
     if (ready) {
+      say("  step: target listens on the other port\n");
       helper_listen(&h, 'l', OTHER_PORT);
+      say("  step: waiting for wait-listen to report it\n");
       saw = wl_saw(&w, "not on port");  // the event, handled, still waiting
-      if (saw)
+      if (saw) {
+        say("  step: target listens on the port (IPv6)\n");
         helper_listen(&h, '6', PORT);
+      }
     }
     int got = wl_wait(&w);
     check("others-port-then-ipv6", saw ? got : -1, 0, 1, ready, connects(AF_INET6, PORT) == 1);
     helper_stop(&h);
     helper_stop(&other);
+  }
+  {  // eight threads listen at once (one of them on the port): each
+     // thread's state change and listen() return pair up by thread id
+    struct helper h = helper_start();
+    struct wl w = wl_start(h.pid, PORT, NULL);
+    int ready = wl_ready(&w);
+    if (ready)
+      helper_listen(&h, 't', PORT);
+    int got = wl_wait(&w);
+    check("threads-at-once", got, 0, 1, ready, connects(AF_INET, PORT) == 1);
+    helper_stop(&h);
   }
   {  // --timeout
     struct helper h = helper_start();

@@ -56,10 +56,14 @@ fails, as it should.
 ## How it works
 
 1. wait-listen opens a pidfd for the process, so its exit is an event too.
-2. It loads a BPF program onto the kernel's `inet_sock_set_state` raw
-   tracepoint, which fires when any TCP socket changes state. The program
-   passes on an event only when the new state is `LISTEN` and the calling
-   thread belongs to the process.
+2. It loads two small BPF programs onto raw tracepoints. One, on
+   `inet_sock_set_state` (any TCP socket changing state), notes the thread
+   when a thread of the process moves a socket to `LISTEN`. The other, on
+   `sys_exit` (any system call returning), passes on an event when a noted
+   thread's system call returns: that's its `listen()` finishing, after the
+   kernel has put the socket where connections (and `/proc`) can find it.
+   The state change alone comes too early: reporting it, wait-listen could
+   look before the socket was there and then wait forever.
 3. Only then does it check whether the process is *already* listening on the
    port (its `/proc/PID/net/tcp{,6}`, matched against the sockets in its
    `/proc/PID/fd`). Watching first, then checking, means no `listen()` can
@@ -68,12 +72,13 @@ fails, as it should.
    and a signalfd. Each event re-runs the check of step 3, since the event
    says the process listened on *some* port. It exits on the first answer.
 
-Nothing polls. The raw tracepoint hands the program the tracepoint's
-arguments as plain integers, so it depends on no kernel struct layout and
-needs no kernel BTF or BPF JIT: one binary works on any kernel from 5.8,
+Nothing polls. Raw tracepoints hand a program the tracepoint's arguments as
+plain integers, and these programs read nothing but the new state, so they
+depend on no kernel struct layout or syscall numbering and need no kernel
+BTF or BPF JIT: one binary works on any kernel from 5.8,
 including 32-bit Arm kernels without BTF. More detail: [DESIGN.md](DESIGN.md).
 
-The program is attached through a BPF link that is never pinned and never
+The programs are attached through BPF links that are never pinned and never
 inherited, so the kernel detaches it when wait-listen exits, however it
 exits (even SIGKILL). Orderly exits also detach it explicitly first.
 
@@ -88,6 +93,11 @@ exits (even SIGKILL). Orderly exits also detach it explicitly first.
   receives *afterwards* without calling `listen()` itself (inherited from a
   parent, or passed over a Unix socket, as with systemd socket activation)
   isn't.
+- **io_uring's asynchronous listen.** wait-listen notices a `listen()` when
+  the calling thread's system call returns. io_uring's `IORING_OP_LISTEN`
+  (Linux 6.11+) may run on an io_uring worker thread, which never returns to
+  user space, so such a listen may go unnoticed. Plain `listen()`, from any
+  number of threads at once, is fine.
 - **TCP over IPv4 and IPv6 only.** Not UDP, Unix sockets or SCTP.
 - **The port, on any address.** Listening on `127.0.0.1:9105` counts as
   listening on 9105, even if clients will come from elsewhere.
@@ -101,7 +111,9 @@ exits (even SIGKILL). Orderly exits also detach it explicitly first.
   `CAP_PERFMON` (a user namespace's root doesn't count), plus `CAP_SYS_PTRACE`
   or the target's own uid to read its `/proc/PID/fd`.
 - **Linux 5.8 or newer** (the BPF ring buffer), with `CONFIG_BPF_SYSCALL`,
-  `CONFIG_BPF_EVENTS` and the `inet_sock_set_state` tracepoint. Tested on
+  `CONFIG_BPF_EVENTS` and the `inet_sock_set_state` and `sys_exit`
+  tracepoints. While waiting, a tiny program (one hash lookup) runs on every
+  system call return on the machine. Tested on
   Debian's 6.1, 6.12 and 7.3 kernels, on x86-64 and 32-bit Arm (Cortex-A7),
   with and without the BPF JIT.
 

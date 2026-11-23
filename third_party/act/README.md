@@ -27,9 +27,20 @@ bazel run //third_party/act -- --list
 ```
 
 Everything after `--` goes to act. It needs a container engine: Docker, from
-a shell in the `docker` group, or rootless Podman with `WL_ACT_PODMAN=1`
-(which points act at `$XDG_RUNTIME_DIR/podman/podman.sock`). The wrapper
-(`act.sh.tpl`) adds the pinned image for both `runs-on` labels, a container
+a shell in the `docker` group or a rootless Docker named by `DOCKER_HOST`, or
+rootless Podman with `WL_ACT_PODMAN=1` (which points act at
+`$XDG_RUNTIME_DIR/podman/podman.sock`). `WL_ACT_DOCKER_UNIT=<user unit>` runs
+the engine only for the duration: the wrapper starts that systemd user unit
+first and stops it when act exits. For example, with a rootless dockerd as
+the user unit `docker-rootless.service`:
+
+```
+WL_ACT_DOCKER_UNIT=docker-rootless.service \
+DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock \
+  bazel run //third_party/act -- -j test
+```
+
+The wrapper (`act.sh.tpl`) adds the pinned image for both `runs-on` labels, a container
 label `wait-listen.owner=act` and a memory cap (`WL_ACT_MEMORY`, default 6g),
 `--rm`, and keeps act's action cache, cache server and artifacts in `.act/`
 of the checkout (gitignored; `WL_ACT_STATE` overrides).

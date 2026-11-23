@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // wait-listen: wait, without polling, until a process listens on a TCP port.
 // See DESIGN.md.
+#include <dirent.h>
 #include <errno.h>
 #include <getopt.h>
 #include <limits.h>
@@ -92,7 +93,7 @@ static int check(pid_t pid, unsigned port) {
 // explicit teardown makes that ordering visible and leaves nothing for the
 // kernel to clean up.
 struct state {
-  struct bpf_link *link;
+  struct bpf_link *link, *exit_link;
   struct ring_buffer *rb;
   struct bpf_object *obj;
   int pidfd, ep, tfd, sfd;
@@ -100,6 +101,7 @@ struct state {
 
 static void teardown(struct state *st) {
   bpf_link__destroy(st->link);  // detach first: no more events
+  bpf_link__destroy(st->exit_link);
   ring_buffer__free(st->rb);
   bpf_object__close(st->obj);  // unloads the program and its maps
   if (st->sfd >= 0)
@@ -115,6 +117,37 @@ static void teardown(struct state *st) {
 static int watch(int ep, int fd) {
   struct epoll_event ev = {.events = EPOLLIN, .data.fd = fd};
   return epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
+}
+
+// Notes every current thread of pid in the BPF program's `pending` map. A
+// full map is an error, never a silent gap.
+static int seed_threads(struct bpf_object *obj, pid_t pid) {
+  struct bpf_map *pending = bpf_object__find_map_by_name(obj, "pending");
+  if (!pending) {
+    errno = ENOENT;
+    return -1;
+  }
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%d/task", (int)pid);
+  DIR *d = opendir(path);
+  if (!d)
+    return errno == ENOENT ? 0 : -1;  // gone: the pidfd says so next
+  struct dirent *e;
+  __u8 one = 1;
+  int err = 0;
+  while ((e = readdir(d))) {
+    char *end;
+    unsigned long tid = strtoul(e->d_name, &end, 10);
+    if (*end || e->d_name[0] == '.')
+      continue;
+    __u32 key = (__u32)tid;
+    if (bpf_map_update_elem(bpf_map__fd(pending), &key, &one, BPF_ANY)) {
+      err = -1;
+      break;
+    }
+  }
+  closedir(d);
+  return err;
 }
 
 static int run(struct state *st, pid_t pid, unsigned port, unsigned long timeout) {
@@ -153,7 +186,8 @@ static int run(struct state *st, pid_t pid, unsigned port, unsigned long timeout
   struct bpf_map *target = bpf_object__find_map_by_name(st->obj, "target");
   struct bpf_map *events = bpf_object__find_map_by_name(st->obj, "events");
   struct bpf_program *prog = bpf_object__find_program_by_name(st->obj, "on_set_state");
-  if (!target || !events || !prog) {
+  struct bpf_program *exit_prog = bpf_object__find_program_by_name(st->obj, "on_sys_exit");
+  if (!target || !events || !prog || !exit_prog) {
     fprintf(stderr, "wait-listen: BPF object lacks its maps or program\n");
     return EXIT_ERROR;
   }
@@ -163,11 +197,26 @@ static int run(struct state *st, pid_t pid, unsigned port, unsigned long timeout
   st->rb = ring_buffer__new(bpf_map__fd(events), on_event, NULL, NULL);
   if (!st->rb)
     goto fail;
+  // sys_exit first: once on_set_state remembers a thread, the report on its
+  // listen() returning mustn't be missed.
+  st->exit_link = bpf_program__attach_raw_tracepoint(exit_prog, "sys_exit");
+  if (!st->exit_link) {
+    fprintf(stderr, "wait-listen: attaching to sys_exit: %s\n", strerror(errno));
+    return EXIT_KERNEL;
+  }
   st->link = bpf_program__attach_raw_tracepoint(prog, "inet_sock_set_state");
   if (!st->link) {
     fprintf(stderr, "wait-listen: attaching to inet_sock_set_state: %s\n", strerror(errno));
     return EXIT_KERNEL;
   }
+
+  // A listen() already in progress when we attached set its socket's state
+  // before on_set_state could note the thread, and its socket may not be
+  // findable yet: note every existing thread now, so whichever of them is
+  // inside listen() reports when it returns. One that returned before we
+  // noted it has its socket in place already, for the check below.
+  if (seed_threads(st->obj, pid))
+    goto fail;
 
   // 3. Already listening?
   int r = check(pid, port);
@@ -182,12 +231,19 @@ static int run(struct state *st, pid_t pid, unsigned port, unsigned long timeout
     close(ready_fd);
     ready_fd = -1;
   }
+  if (verbose)
+    fprintf(stderr, "wait-listen: watching pid %d for port %u\n", (int)pid, port);
 
   // 4. Wait for the first of: a listen() by the process, its exit, the
   // timeout, a signal.
+  // The ring buffer map's own descriptor (readable while it holds records),
+  // not ring_buffer__epoll_fd(): that is libbpf's internal epoll instance,
+  // and an epoll nested in ours depends on the kernel passing the inner
+  // wakeup on, which kernel 7.3 on 32-bit Arm sometimes didn't (the VM tests
+  // hung there, 3 runs in 6).
+  int rbfd = bpf_map__fd(events);
   st->ep = epoll_create1(EPOLL_CLOEXEC);
-  if (st->ep < 0 || watch(st->ep, ring_buffer__epoll_fd(st->rb)) || watch(st->ep, st->pidfd) ||
-      watch(st->ep, st->sfd))
+  if (st->ep < 0 || watch(st->ep, rbfd) || watch(st->ep, st->pidfd) || watch(st->ep, st->sfd))
     goto fail;
   if (timeout) {
     struct itimerspec its = {.it_value = {.tv_sec = (time_t)timeout}};
@@ -217,8 +273,11 @@ static int run(struct state *st, pid_t pid, unsigned port, unsigned long timeout
     if (!listened)
       continue;
     // The process put *some* socket into LISTEN; is it the port?
-    if (ring_buffer__consume(st->rb) < 0)
+    int records = ring_buffer__consume(st->rb);
+    if (records < 0)
       goto fail;
+    if (verbose)
+      fprintf(stderr, "wait-listen: woken: %d ring buffer record(s)\n", records);
     r = check(pid, port);
     if (r != 0)
       return r == 1 ? EXIT_LISTENING : r == -1 ? EXIT_GONE : EXIT_ERROR;
