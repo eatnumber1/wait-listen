@@ -1,0 +1,77 @@
+# wait-listen: design
+
+## The event
+
+`listen(2)` on an IPv4 or IPv6 TCP socket moves it to `TCP_LISTEN` in
+`inet_csk_listen_start()`, which calls `inet_sk_state_store()`, which fires
+the `sock:inet_sock_set_state` tracepoint (kernel 4.16+) in the context of
+the process calling `listen()`.
+
+Nothing else announces it. Netlink's socket diagnostics (`NETLINK_SOCK_DIAG`,
+what `ss` uses) can list sockets, but its multicast groups only report
+destroyed sockets (`SKNLGRP_INET_TCP_DESTROY` and friends). The audit
+subsystem can report `listen()` calls, at the cost of system-wide audit
+rules.
+
+## Steps
+
+1. Open a pidfd for `--pid`. The process exiting is then an event too.
+2. Load and attach the BPF program to the *raw* tracepoint
+   `inet_sock_set_state`. A raw tracepoint gets the tracepoint's arguments
+   as an array of 64-bit values (`sk`, `oldstate`, `newstate`), whatever the
+   kernel's architecture, so the program depends on no kernel struct
+   layout, needs no BTF and no tracefs. It passes on an event (through a BPF
+   ring buffer) only when `newstate` is `TCP_LISTEN` (10) and the calling
+   thread belongs to `--pid` (its thread group id).
+3. Only after attaching, check whether the process listens on `--port`:
+   read its `/proc/PID/net/tcp` and `tcp6` (its own network namespace) for
+   `LISTEN` entries on the port, and match their inodes against the
+   `socket:[inode]` links in `/proc/PID/fd`. Attaching first means a
+   `listen()` before the check is found by the check, and one after it
+   produces an event; there is no window in between.
+4. `epoll` on the ring buffer, the pidfd and (with `--timeout`) a timerfd.
+   On a ring-buffer event, repeat the check of step 3 (the event says the
+   process started listening on *some* socket; the check says whether it's
+   the port). Exit on a positive check, on the process exiting, or on the
+   timeout.
+
+No step sleeps or polls. Matching the thread group id also keeps a process
+in another network namespace that uses the same port from matching; the
+check reads the target's own namespace.
+
+## No BTF needed
+
+Raspberry Pi kernels, among others, have no kernel BTF, so CO-RE
+relocations aren't available, and a tracepoint's context struct differs
+between architectures (it starts with a pointer). The raw tracepoint
+sidesteps both: its arguments are the tracepoint's prototype, `(const
+struct sock *sk, int oldstate, int newstate)`, as an array of `u64`, and the
+program reads only `newstate`. libbpf loads the program's own BTF where the
+kernel accepts it.
+
+## Build
+
+- Bazel module, hermetic: `toolchains_llvm` provides Clang (for the host
+  binary and for `-target bpf`) with a Debian sysroot per target; libbpf comes
+  from the Bazel Central Registry.
+- The BPF object is compiled once (BPF bytecode is the same for every host
+  architecture, and the raw tracepoint has no layout to differ) and
+  embedded in the binary (C23 `#embed`), which is linked statically: one
+  file to install.
+- Targets: `x86_64-linux-gnu` and `armv7-linux-gnueabihf`.
+
+## Tests
+
+- Unprivileged unit tests: the "already listening" check (`/proc`
+  fixtures, including IPv6 and other ports), argument parsing.
+- Privileged tests run inside a qemu VM, where root is safe: an x86-64 VM and
+  an armv7 VM with a 32-bit kernel without BTF. Cases:
+  - the process listens after `wait-listen` starts: exit 0;
+  - the process was already listening: exit 0;
+  - the process exits without listening: exit 1;
+  - another process listens on the same port: no exit (then the target
+    listens: exit 0);
+  - the process listens on another port only: no exit (an event, a
+    negative check);
+  - IPv6 and IPv4;
+  - `--timeout` expires: exit 2.

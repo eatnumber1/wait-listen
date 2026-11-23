@@ -1,0 +1,12 @@
+module(name = "wait-listen")
+
+bazel_dep(name = "rules_cc", version = "0.2.28")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "libbpf", version = "1.7.0.bcr.2")
+bazel_dep(name = "toolchains_llvm", version = "1.13.0")
+
+llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
+llvm.toolchain(llvm_version = "20.1.8")
+use_repo(llvm, "llvm_toolchain")
+
+register_toolchains("@llvm_toolchain//:all")

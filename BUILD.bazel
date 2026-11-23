@@ -1,0 +1,70 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+
+# The BPF object, compiled with the hermetic Clang for -target bpf. BPF
+# bytecode is the same for every host architecture.
+genrule(
+    name = "bpf_object",
+    srcs = [
+        "src/wait_listen.bpf.c",
+        "src/bpf_types.h",
+        "@libbpf//:source_headers",
+    ],
+    outs = ["wait_listen.bpf.o"],
+    cmd = """
+        set -e
+        inc=$(@D)/bpfinc
+        mkdir -p $$inc/bpf
+        for f in $(execpaths @libbpf//:source_headers); do
+          case $$f in
+            */src/bpf_helpers.h|*/src/bpf_helper_defs.h) cp $$f $$inc/bpf/ ;;
+          esac
+        done
+        $(execpath @llvm_toolchain_llvm//:bin/clang) -target bpf -O2 -g -Wall -Werror \
+          -nostdinc -I$$inc -I$$(dirname $(location src/bpf_types.h)) \
+          -c $(location src/wait_listen.bpf.c) -o $@
+    """,
+    tools = ["@llvm_toolchain_llvm//:bin/clang"],
+)
+
+cc_library(
+    name = "bpf_object_embed",
+    textual_hdrs = [":bpf_object"],
+    includes = ["."],
+)
+
+cc_library(
+    name = "listening",
+    srcs = ["src/listening.c"],
+    hdrs = ["src/listening.h"],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    strip_include_prefix = "src",
+)
+
+cc_binary(
+    name = "wait-listen",
+    srcs = ["src/main.c"],
+    copts = [
+        "-std=c23",
+        "-Wall",
+        "-Werror",
+    ],
+    deps = [
+        ":bpf_object_embed",
+        ":listening",
+        "@libbpf",
+    ],
+)
+
+cc_test(
+    name = "listening_test",
+    srcs = ["tests/listening_test.c"],
+    copts = [
+        "-Wall",
+        "-Werror",
+    ],
+    deps = [":listening"],
+)
