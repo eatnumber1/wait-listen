@@ -9,7 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/epoll.h>
+#include <sys/signalfd.h>
 #include <sys/syscall.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
@@ -26,6 +28,7 @@ enum {
   EXIT_USAGE = 3,
   EXIT_KERNEL = 4,
   EXIT_ERROR = 5,
+  EXIT_SIGNAL = 6,
 };
 
 #ifndef SYS_pidfd_open
@@ -49,7 +52,8 @@ static int libbpf_log(enum libbpf_print_level level, const char *fmt, va_list ap
 static void usage(FILE *f) {
   fprintf(f,
           "usage: wait-listen --pid PID --port PORT [--timeout SECONDS] [--verbose]\n"
-          "Exit: 0 listening, 1 process gone, 2 timeout, 3 usage, 4 kernel can't, 5 error.\n");
+          "Exit: 0 listening, 1 process gone, 2 timeout, 3 usage, 4 kernel can't, 5 error,\n"
+          "6 stopped by a signal.\n");
 }
 
 static int parse_uint(const char *s, unsigned long max, unsigned long *out) {
@@ -63,9 +67,9 @@ static int parse_uint(const char *s, unsigned long max, unsigned long *out) {
 }
 
 static int on_event(void *ctx, void *data, size_t size) {
+  (void)ctx;
   (void)data;
   (void)size;
-  *(int *)ctx = 1;
   return 0;
 }
 
@@ -78,6 +82,140 @@ static int check(pid_t pid, unsigned port) {
     return -1;
   fprintf(stderr, "wait-listen: reading /proc/%d: %s\n", (int)pid, strerror(errno));
   return -2;
+}
+
+// Everything that must be released, in the order it's released. The kernel
+// detaches the program when the last reference to its link closes, on any
+// exit (even SIGKILL), since it's never pinned and nothing inherits it; the
+// explicit teardown makes that ordering visible and leaves nothing for the
+// kernel to clean up.
+struct state {
+  struct bpf_link *link;
+  struct ring_buffer *rb;
+  struct bpf_object *obj;
+  int pidfd, ep, tfd, sfd;
+};
+
+static void teardown(struct state *st) {
+  bpf_link__destroy(st->link);  // detach first: no more events
+  ring_buffer__free(st->rb);
+  bpf_object__close(st->obj);  // unloads the program and its maps
+  if (st->sfd >= 0)
+    close(st->sfd);
+  if (st->tfd >= 0)
+    close(st->tfd);
+  if (st->ep >= 0)
+    close(st->ep);
+  if (st->pidfd >= 0)
+    close(st->pidfd);
+}
+
+static int watch(int ep, int fd) {
+  struct epoll_event ev = {.events = EPOLLIN, .data.fd = fd};
+  return epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
+}
+
+static int run(struct state *st, pid_t pid, unsigned port, unsigned long timeout) {
+  // Signals arrive through a signalfd, so a stopped unit leaves through
+  // teardown() like every other exit.
+  sigset_t sigs;
+  sigemptyset(&sigs);
+  sigaddset(&sigs, SIGTERM);
+  sigaddset(&sigs, SIGINT);
+  sigaddset(&sigs, SIGHUP);
+  if (sigprocmask(SIG_BLOCK, &sigs, NULL) ||
+      (st->sfd = signalfd(-1, &sigs, SFD_CLOEXEC)) < 0)
+    goto fail;
+
+  // 1. The process exiting is an event.
+  st->pidfd = (int)syscall(SYS_pidfd_open, pid, 0);
+  if (st->pidfd < 0) {
+    if (errno == ESRCH)
+      return EXIT_GONE;
+    fprintf(stderr, "wait-listen: pidfd_open(%d): %s\n", (int)pid, strerror(errno));
+    return errno == ENOSYS ? EXIT_KERNEL : EXIT_ERROR;
+  }
+
+  // 2. Load and attach first, so no listen() can fall between check and watch.
+  LIBBPF_OPTS(bpf_object_open_opts, opts, .object_name = "wait_listen");
+  st->obj = bpf_object__open_mem(bpf_object_bytes, sizeof(bpf_object_bytes), &opts);
+  if (!st->obj) {
+    fprintf(stderr, "wait-listen: opening the BPF object: %s\n", strerror(errno));
+    return EXIT_ERROR;
+  }
+  if (bpf_object__load(st->obj)) {
+    int e = errno;
+    fprintf(stderr, "wait-listen: loading the BPF program: %s\n", strerror(e));
+    return (e == EPERM || e == EACCES) ? EXIT_ERROR : EXIT_KERNEL;
+  }
+  struct bpf_map *target = bpf_object__find_map_by_name(st->obj, "target");
+  struct bpf_map *events = bpf_object__find_map_by_name(st->obj, "events");
+  struct bpf_program *prog = bpf_object__find_program_by_name(st->obj, "on_set_state");
+  if (!target || !events || !prog) {
+    fprintf(stderr, "wait-listen: BPF object lacks its maps or program\n");
+    return EXIT_ERROR;
+  }
+  __u32 zero = 0, tgid = (__u32)pid;
+  if (bpf_map_update_elem(bpf_map__fd(target), &zero, &tgid, BPF_ANY))
+    goto fail;
+  st->rb = ring_buffer__new(bpf_map__fd(events), on_event, NULL, NULL);
+  if (!st->rb)
+    goto fail;
+  st->link = bpf_program__attach_raw_tracepoint(prog, "inet_sock_set_state");
+  if (!st->link) {
+    fprintf(stderr, "wait-listen: attaching to inet_sock_set_state: %s\n", strerror(errno));
+    return EXIT_KERNEL;
+  }
+
+  // 3. Already listening?
+  int r = check(pid, port);
+  if (r != 0)
+    return r == 1 ? EXIT_LISTENING : r == -1 ? EXIT_GONE : EXIT_ERROR;
+
+  // 4. Wait for the first of: a listen() by the process, its exit, the
+  // timeout, a signal.
+  st->ep = epoll_create1(EPOLL_CLOEXEC);
+  if (st->ep < 0 || watch(st->ep, ring_buffer__epoll_fd(st->rb)) || watch(st->ep, st->pidfd) ||
+      watch(st->ep, st->sfd))
+    goto fail;
+  if (timeout) {
+    struct itimerspec its = {.it_value = {.tv_sec = (time_t)timeout}};
+    st->tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    if (st->tfd < 0 || timerfd_settime(st->tfd, 0, &its, NULL) || watch(st->ep, st->tfd))
+      goto fail;
+  }
+  for (;;) {
+    struct epoll_event got[4];
+    int n = epoll_wait(st->ep, got, 4, -1);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      goto fail;
+    }
+    int listened = 0;
+    for (int i = 0; i < n; i++) {
+      int fd = got[i].data.fd;
+      if (fd == st->sfd)
+        return EXIT_SIGNAL;
+      if (fd == st->pidfd)
+        return EXIT_GONE;  // its sockets are gone with it
+      if (fd == st->tfd)
+        return EXIT_TIMEOUT;
+      listened = 1;
+    }
+    if (!listened)
+      continue;
+    // The process put *some* socket into LISTEN; is it the port?
+    if (ring_buffer__consume(st->rb) < 0)
+      goto fail;
+    r = check(pid, port);
+    if (r != 0)
+      return r == 1 ? EXIT_LISTENING : r == -1 ? EXIT_GONE : EXIT_ERROR;
+  }
+
+fail:
+  fprintf(stderr, "wait-listen: %s\n", strerror(errno));
+  return EXIT_ERROR;
 }
 
 int main(int argc, char **argv) {
@@ -121,115 +259,10 @@ int main(int argc, char **argv) {
     goto bad;
 
   libbpf_set_print(libbpf_log);
-
-  // 1. The process exiting is an event.
-  int pidfd = (int)syscall(SYS_pidfd_open, (pid_t)pid, 0);
-  if (pidfd < 0) {
-    if (errno == ESRCH)
-      return EXIT_GONE;
-    fprintf(stderr, "wait-listen: pidfd_open(%lu): %s\n", pid, strerror(errno));
-    return errno == ENOSYS ? EXIT_KERNEL : EXIT_ERROR;
-  }
-
-  // 2. Load and attach first, so no listen() can fall between check and watch.
-  LIBBPF_OPTS(bpf_object_open_opts, opts, .object_name = "wait_listen");
-  struct bpf_object *obj = bpf_object__open_mem(bpf_object_bytes, sizeof(bpf_object_bytes), &opts);
-  if (!obj) {
-    fprintf(stderr, "wait-listen: opening the BPF object: %s\n", strerror(errno));
-    return EXIT_ERROR;
-  }
-  if (bpf_object__load(obj)) {
-    int e = errno;
-    fprintf(stderr, "wait-listen: loading the BPF program: %s\n", strerror(e));
-    return (e == EPERM || e == EACCES) ? EXIT_ERROR : EXIT_KERNEL;
-  }
-  struct bpf_map *target = bpf_object__find_map_by_name(obj, "target");
-  struct bpf_map *events = bpf_object__find_map_by_name(obj, "events");
-  struct bpf_program *prog = bpf_object__find_program_by_name(obj, "on_set_state");
-  if (!target || !events || !prog) {
-    fprintf(stderr, "wait-listen: BPF object lacks its maps or program\n");
-    return EXIT_ERROR;
-  }
-  __u32 zero = 0, tgid = (__u32)pid;
-  if (bpf_map_update_elem(bpf_map__fd(target), &zero, &tgid, BPF_ANY)) {
-    fprintf(stderr, "wait-listen: setting the target: %s\n", strerror(errno));
-    return EXIT_ERROR;
-  }
-  int got_event = 0;
-  struct ring_buffer *rb = ring_buffer__new(bpf_map__fd(events), on_event, &got_event, NULL);
-  if (!rb) {
-    fprintf(stderr, "wait-listen: ring buffer: %s\n", strerror(errno));
-    return EXIT_ERROR;
-  }
-  struct bpf_link *link = bpf_program__attach_raw_tracepoint(prog, "inet_sock_set_state");
-  if (!link) {
-    fprintf(stderr, "wait-listen: attaching to inet_sock_set_state: %s\n", strerror(errno));
-    return EXIT_KERNEL;
-  }
-
-  // 3. Already listening?
-  int r = check((pid_t)pid, (unsigned)port);
-  if (r == 1)
-    return EXIT_LISTENING;
-  if (r == -1)
-    return EXIT_GONE;
-  if (r == -2)
-    return EXIT_ERROR;
-
-  // 4. Wait for the first of: a listen() by the process, its exit, the timeout.
-  int ep = epoll_create1(EPOLL_CLOEXEC);
-  int tfd = -1;
-  if (ep < 0)
-    goto fail;
-  struct epoll_event ev = {.events = EPOLLIN};
-  ev.data.fd = ring_buffer__epoll_fd(rb);
-  if (epoll_ctl(ep, EPOLL_CTL_ADD, ev.data.fd, &ev))
-    goto fail;
-  ev.data.fd = pidfd;
-  if (epoll_ctl(ep, EPOLL_CTL_ADD, pidfd, &ev))
-    goto fail;
-  if (timeout) {
-    tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-    struct itimerspec its = {.it_value = {.tv_sec = (time_t)timeout}};
-    if (tfd < 0 || timerfd_settime(tfd, 0, &its, NULL))
-      goto fail;
-    ev.data.fd = tfd;
-    if (epoll_ctl(ep, EPOLL_CTL_ADD, tfd, &ev))
-      goto fail;
-  }
-  for (;;) {
-    struct epoll_event got[3];
-    int n = epoll_wait(ep, got, 3, -1);
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-      goto fail;
-    }
-    for (int i = 0; i < n; i++) {
-      if (got[i].data.fd == pidfd) {
-        // It exited; it may have listened just before (then the ring buffer
-        // has the event, but its sockets are gone: either way, it's gone).
-        return EXIT_GONE;
-      }
-      if (got[i].data.fd == tfd)
-        return EXIT_TIMEOUT;
-    }
-    // A ring-buffer event: the process put *some* socket into LISTEN.
-    got_event = 0;
-    if (ring_buffer__consume(rb) < 0)
-      goto fail;
-    r = check((pid_t)pid, (unsigned)port);
-    if (r == 1)
-      return EXIT_LISTENING;
-    if (r == -1)
-      return EXIT_GONE;
-    if (r == -2)
-      return EXIT_ERROR;
-  }
-
-fail:
-  fprintf(stderr, "wait-listen: %s\n", strerror(errno));
-  return EXIT_ERROR;
+  struct state st = {.pidfd = -1, .ep = -1, .tfd = -1, .sfd = -1};
+  int status = run(&st, (pid_t)pid, (unsigned)port, timeout);
+  teardown(&st);
+  return status;
 
 bad:
   usage(stderr);

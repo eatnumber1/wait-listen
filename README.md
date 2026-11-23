@@ -34,7 +34,8 @@ Exit status:
 | 2 | the timeout expired (default: none; it's an upper bound, not a wait) |
 | 3 | usage error |
 | 4 | the kernel can't do this (no BPF, no such tracepoint) |
-| 5 | other error |
+| 5 | other error (including missing privileges) |
+| 6 | stopped by SIGTERM, SIGINT or SIGHUP |
 
 ## Requirements
 
@@ -42,8 +43,19 @@ Exit status:
   `CONFIG_BPF_EVENTS` and the `inet_sock_set_state` tracepoint. Kernel BTF
   is not needed, and neither is the BPF JIT: it works on 32-bit Arm kernels
   too.
-- Root, or `CAP_BPF` and `CAP_PERFMON` (to load the program), and read
-  access to the target's `/proc/PID/fd`.
+- Root, or `CAP_BPF` and `CAP_PERFMON` (to load a tracing program; a user
+  namespace's root doesn't count) and `CAP_SYS_PTRACE` or the target's own
+  uid (to read its `/proc/PID/fd`). In a unit whose daemon runs
+  unprivileged, use `ExecStartPost=+/usr/local/bin/wait-listen ...`.
+
+## Teardown
+
+The program is attached through a BPF link that is never pinned and never
+inherited, so the kernel detaches it when `wait-listen` exits, however it
+exits (even SIGKILL). On every normal exit, including SIGTERM, SIGINT and
+SIGHUP (received through a signalfd), `wait-listen` also detaches and unloads
+it explicitly first. The tests check that no program is left loaded after
+each way of exiting.
 
 ## How it works
 

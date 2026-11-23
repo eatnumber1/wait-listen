@@ -74,4 +74,18 @@ kernel accepts it.
   - the process listens on another port only: no exit (an event, a
     negative check);
   - IPv6 and IPv4;
-  - `--timeout` expires: exit 2.
+  - `--timeout` expires: exit 2;
+  - SIGTERM: exit 6;
+  - after every case above, and after SIGKILL, no BPF program named
+    `on_set_state` is loaded and no link is attached (listed by ID through
+    the bpf syscall).
+
+## Teardown
+
+The program is attached through a BPF link (a file descriptor). It is never
+pinned in bpffs, and nothing inherits the descriptor (libbpf opens with
+`O_CLOEXEC`; `wait-listen` never forks or execs), so the kernel detaches and
+frees the program when the process exits, however it exits. Every orderly
+exit, including SIGTERM, SIGINT and SIGHUP (received through a signalfd in the
+same epoll set), also tears down explicitly: link first, then the ring
+buffer, the object (program and maps) and the descriptors.

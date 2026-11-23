@@ -26,10 +26,10 @@ genrule(
     tools = ["@llvm_toolchain_llvm//:bin/clang"],
 )
 
+# Makes the object an input of the compile that #embeds it.
 cc_library(
     name = "bpf_object_embed",
     textual_hdrs = [":bpf_object"],
-    includes = ["."],
 )
 
 cc_library(
@@ -48,9 +48,11 @@ cc_binary(
     name = "wait-listen",
     srcs = ["src/main.c"],
     copts = [
-        "-std=c23",
+        "-std=gnu23",
         "-Wall",
         "-Werror",
+        # #embed searches --embed-dir, not the include path.
+        "--embed-dir=$(GENDIR)",
     ],
     deps = [
         ":bpf_object_embed",
