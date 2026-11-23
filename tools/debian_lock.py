@@ -111,9 +111,13 @@ def first_dependency(index, meta, suite, arch):
   if meta not in index:
     sys.exit(f"{suite}/{arch} has no package {meta}")
   deps = dependencies(index, meta)
-  if not deps:
+  # linux-image-amd64 -> the linux-image-* it depends on (newer kernels'
+  # metapackages list linux-base-* first).
+  family = "-".join(meta.split("-")[:2]) + "-"
+  same = [d for d in deps if d.startswith(family) and d != meta]
+  if not (same or deps):
     sys.exit(f"{meta} depends on nothing")
-  return deps[0]
+  return (same or deps)[0]
 
 
 def closure(index, names, exclude, suite, arch):
@@ -147,7 +151,11 @@ def resolve(request):
     # "meta": metapackages (linux-image-amd64) stand for the one package they
     # depend on (linux-image-6.12.N+deb13-amd64), which is what's locked.
     for meta in want.get("meta", []):
-      names.add(first_dependency(index, meta, suite, arch))
+      image = first_dependency(index, meta, suite, arch)
+      names.add(image)
+      # Debian 14 splits a kernel: linux-image-V-F is then a shell whose
+      # kernel image is in linux-binary-V-F.
+      names.update(d for d in dependencies(index, image) if d.startswith("linux-binary-"))
     # "closure": everything the packages depend on, transitively (first
     # alternative of each), except "exclude" (and what only they pull in).
     if want.get("closure"):

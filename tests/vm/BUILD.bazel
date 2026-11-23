@@ -26,19 +26,29 @@ cc_binary(
     ],
 )
 
+# Kernels: the oldest and newest Debian has (bookworm's 6.1, forky's 7.3),
+# and trixie's 6.12 between them (Warawara's Raspberry Pi kernel is 6.12):
+# working on the oldest and newest is taken to mean working on all between.
+_KERNELS = ["6_1", "6_12", "7_3"]
+
 _ARCHES = {
     "x86_64": dict(
-        kernel = "@debian_sysroot_vm_kernel_amd64//:kernel",
+        deb = "amd64",
         qemu = "@debian_sysroot_qemu_amd64//:usr/bin/qemu-system-x86_64",
         machine = ["-machine", "q35"],
         console = "console=ttyS0",
+        # x86-64 kernels have the JIT on (Debian: always on).
+        jit = {"": ""},
     ),
     "armv7": dict(
-        kernel = "@debian_sysroot_vm_kernel_armhf//:kernel",
+        deb = "armhf",
         qemu = "@debian_sysroot_qemu_amd64//:usr/bin/qemu-system-arm",
         # The Raspberry Pi 2's CPU.
         machine = ["-machine", "virt", "-cpu", "cortex-a7"],
         console = "console=ttyAMA0",
+        # With the BPF JIT (Debian's armmp default is off), and without it,
+        # as on Raspberry Pi kernels, which have none.
+        jit = {"_jit": "wl.jit=1", "_nojit": "wl.jit=0"},
     ),
 }
 
@@ -57,7 +67,10 @@ _ARCHES = {
 [
     genrule(
         name = "initramfs_" + arch,
-        srcs = [":guest_" + arch],
+        srcs = [
+            ":guest_" + arch,
+            "@debian_sysroot_busybox_%s//:busybox" % _ARCHES[arch]["deb"],
+        ],
         outs = ["initramfs_%s.cpio" % arch],
         cmd = """
             for f in $(execpaths :guest_{arch}); do
@@ -66,44 +79,38 @@ _ARCHES = {
                 */wait-listen) wl=$$f ;;
               esac
             done
-            $(execpath :mkcpio) $@ init=$$init wait-listen=$$wl
-        """.format(arch = arch),
+            $(execpath :mkcpio) $@ init=$$init wait-listen=$$wl \
+              busybox=$(execpath @debian_sysroot_busybox_{deb}//:busybox)
+        """.format(arch = arch, deb = _ARCHES[arch]["deb"]),
         tools = [":mkcpio"],
     )
     for arch in _ARCHES
 ]
 
-# armv7 runs twice: with the kernel's BPF JIT (wl.jit=1; Debian's armmp
-# default is off), and without it (wl.jit=0), as on Raspberry Pi kernels,
-# which have none.
-_TESTS = {
-    "x86_64": ("x86_64", ""),
-    "armv7_jit": ("armv7", "wl.jit=1"),
-    "armv7_nojit": ("armv7", "wl.jit=0"),
-}
-
 [
     sh_test(
-        name = "vm_test_" + name,
+        name = "vm_test_%s_%s%s" % (arch, kernel, variant),
         size = "large",
         srcs = ["run_vm_test.sh"],
         args = [
             "$(rootpath @debian_sysroot_qemu_amd64//:dynamic_loader)",
             "$(rootpath %s)" % _ARCHES[arch]["qemu"],
-            "$(rootpath %s)" % _ARCHES[arch]["kernel"],
+            "$(rootpath @debian_sysroot_vm_kernel_%s_%s//:kernel)" % (_ARCHES[arch]["deb"], kernel),
             "$(rootpath :initramfs_%s)" % arch,
         ] + _ARCHES[arch]["machine"] + [
             "--",
             _ARCHES[arch]["console"],
-            extra,
+            cmdline,
         ],
         data = [
-            _ARCHES[arch]["kernel"],
+            "@debian_sysroot_vm_kernel_%s_%s//:kernel" % (_ARCHES[arch]["deb"], kernel),
             _ARCHES[arch]["qemu"],
             ":initramfs_" + arch,
             "@debian_sysroot_qemu_amd64//:dynamic_loader",
             "@debian_sysroot_qemu_amd64//:sysroot",
         ],
     )
-    for name, (arch, extra) in _TESTS.items()
+    for arch in _ARCHES
+    for kernel in _KERNELS
+    for variant, cmdline in _ARCHES[arch]["jit"].items()
 ]

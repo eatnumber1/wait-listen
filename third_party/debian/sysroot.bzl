@@ -71,13 +71,20 @@ exports_files(glob(["usr/lib/llvm-*/lib/clang/*/lib/linux/*"], allow_empty = Tru
 # role rather than by (versioned) file name.
 filegroup(
     name = "kernel",
-    srcs = glob(["boot/vmlinuz-*"], allow_empty = True),
+    # Debian <= 13: /boot/vmlinuz-V; Debian 14: /usr/lib/modules/V/vmlinuz.
+    srcs = glob(["boot/vmlinuz-*", "usr/lib/modules/*/vmlinuz"], allow_empty = True),
     visibility = ["//visibility:public"],
 )
 
 filegroup(
     name = "dynamic_loader",
     srcs = glob(["usr/lib/*/ld-linux*.so.*"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "busybox",
+    srcs = glob(["bin/busybox", "usr/bin/busybox"], allow_empty = True),
     visibility = ["//visibility:public"],
 )
 

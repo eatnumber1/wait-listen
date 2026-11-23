@@ -36,22 +36,6 @@
         "linux-libc-dev"
       ]
     },
-    "vm_kernel_amd64": {
-      "suite": "trixie",
-      "arch": "amd64",
-      "meta": [
-        "linux-image-amd64"
-      ],
-      "packages": []
-    },
-    "vm_kernel_armhf": {
-      "suite": "trixie",
-      "arch": "armhf",
-      "meta": [
-        "linux-image-armmp-lpae"
-      ],
-      "packages": []
-    },
     "qemu_amd64": {
       "suite": "trixie",
       "arch": "amd64",
@@ -69,6 +53,68 @@
         "perl-base",
         "systemd",
         "systemd-sysv"
+      ]
+    },
+    "vm_kernel_amd64_6_1": {
+      "suite": "bookworm",
+      "arch": "amd64",
+      "meta": [
+        "linux-image-amd64"
+      ],
+      "packages": []
+    },
+    "vm_kernel_amd64_6_12": {
+      "suite": "trixie",
+      "arch": "amd64",
+      "meta": [
+        "linux-image-amd64"
+      ],
+      "packages": []
+    },
+    "vm_kernel_amd64_7_3": {
+      "suite": "forky",
+      "arch": "amd64",
+      "meta": [
+        "linux-image-amd64"
+      ],
+      "packages": []
+    },
+    "busybox_amd64": {
+      "suite": "trixie",
+      "arch": "amd64",
+      "packages": [
+        "busybox-static"
+      ]
+    },
+    "vm_kernel_armhf_6_1": {
+      "suite": "bookworm",
+      "arch": "armhf",
+      "meta": [
+        "linux-image-armmp-lpae"
+      ],
+      "packages": []
+    },
+    "vm_kernel_armhf_6_12": {
+      "suite": "trixie",
+      "arch": "armhf",
+      "meta": [
+        "linux-image-armmp-lpae"
+      ],
+      "packages": []
+    },
+    "vm_kernel_armhf_7_3": {
+      "suite": "forky",
+      "arch": "armhf",
+      "meta": [
+        "linux-image-armmp-lpae"
+      ],
+      "packages": []
+    },
+    "busybox_armhf": {
+      "suite": "trixie",
+      "arch": "armhf",
+      "packages": [
+        "busybox-static"
       ]
     }
   }

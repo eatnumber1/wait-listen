@@ -17,9 +17,15 @@ use_repo(
     "debian_sysroot_amd64_glibc",
     "debian_sysroot_amd64_musl",
     "debian_sysroot_armhf_musl",
+    "debian_sysroot_busybox_amd64",
+    "debian_sysroot_busybox_armhf",
     "debian_sysroot_qemu_amd64",
-    "debian_sysroot_vm_kernel_amd64",
-    "debian_sysroot_vm_kernel_armhf",
+    "debian_sysroot_vm_kernel_amd64_6_1",
+    "debian_sysroot_vm_kernel_amd64_6_12",
+    "debian_sysroot_vm_kernel_amd64_7_3",
+    "debian_sysroot_vm_kernel_armhf_6_1",
+    "debian_sysroot_vm_kernel_armhf_6_12",
+    "debian_sysroot_vm_kernel_armhf_7_3",
 )
 
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")

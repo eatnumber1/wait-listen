@@ -85,10 +85,11 @@ kernel accepts it.
 - `//:listening_test`: the "already listening" check against fixture `/proc`
   trees (IPv4, IPv6, other port, another process's socket, an established
   connection, no IPv6 in the namespace, a missing process).
-- `//tests/vm:vm_test_{x86_64,armv7_jit,armv7_nojit}`: a VM per target
+- `//tests/vm:vm_test_<cpu>_<kernel>[_jit|_nojit]`: a VM per target
   (QEMU from Debian, run through its own pinned loader and libraries; Debian
-  kernels 6.12, amd64 and armmp-lpae on a Cortex-A7, the Raspberry Pi 2's
-  CPU), booting an initramfs (`tests/vm/mkcpio.c`, reproducible) whose /init
+  kernels 6.1, 6.12 and 7.3, the oldest and newest Debian has with one
+  between, taken to cover everything between; amd64, and armmp-lpae on a
+  Cortex-A7, the Raspberry Pi 2's CPU), booting an initramfs (`tests/vm/mkcpio.c`, reproducible) whose /init
   is `tests/vm/guest_init.c` and which carries wait-listen, both static musl
   for that CPU. armv7 runs with the BPF JIT and without (`wl.jit=0`, as on
   Raspberry Pi kernels). Each scenario, as root, waits only on events (pipes,
@@ -101,7 +102,12 @@ kernel accepts it.
     (an event, handled, still waiting), then on the port over IPv6: exit 0;
   - `--timeout 1`: exit 2;
   - SIGTERM: exit 6; SIGKILL: killed;
-  - after each: no BPF link left attached (`BPF_LINK_GET_NEXT_ID`).
+  - a real program: the target execs busybox's `nc -l` (Debian's static
+    busybox, no libraries) once wait-listen is watching: exit 0;
+  - after each: no BPF link left attached (`BPF_LINK_GET_NEXT_ID`);
+  - the oracle, after each exit 0: a client connects (over IPv6 where the
+    target listened so); and where the target listens late, a connect just
+    before it listens is refused.
 
 ## Teardown
 

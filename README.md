@@ -47,7 +47,7 @@ Exit status:
 - Linux 5.8 or newer (BPF ring buffer) with `CONFIG_BPF_SYSCALL`,
   `CONFIG_BPF_EVENTS` and the `inet_sock_set_state` tracepoint. Kernel BTF
   is not needed, and neither is the BPF JIT: it works on 32-bit Arm kernels
-  too.
+  too. Tested on Debian's 6.1, 6.12 and 7.3 kernels, x86-64 and armv7.
 - Root, or `CAP_BPF` and `CAP_PERFMON` (to load a tracing program; a user
   namespace's root doesn't count) and `CAP_SYS_PTRACE` or the target's own
   uid (to read its `/proc/PID/fd`). In a unit whose daemon runs
@@ -77,9 +77,11 @@ bazel build //:wait-listen_x86_64 //:wait-listen_armv7   # static musl binaries
 bazel test //...                                         # unit and VM tests
 ```
 
-The VM tests boot pinned Debian kernels in a pinned QEMU (x86-64, and a
-32-bit Cortex-A7 with and without the BPF JIT) and run every scenario as
-root; nothing on the host needs root.
+The VM tests boot pinned Debian kernels (6.1, 6.12, 7.3) in a pinned QEMU
+(x86-64, and a 32-bit Cortex-A7 with and without the BPF JIT) and run every
+scenario as root, each checked against what it stands for: a client can
+connect when wait-listen says so, and couldn't before. Nothing on the host
+needs root.
 
 ## License
 

@@ -7,12 +7,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/bpf.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/socket.h>
@@ -22,6 +24,7 @@
 #include <unistd.h>
 
 #define WL "/wait-listen"
+#define BUSYBOX "/busybox"
 #define PORT 9105
 #define OTHER_PORT 9104
 
@@ -216,13 +219,38 @@ static int links_attached(void) {
   }
 }
 
-static void check(const char *name, int got, int want, int ready_want, int ready_got) {
+// The ground truth wait-listen stands in for: can a client connect? 1 yes,
+// 0 refused, -1 some other error (reported).
+static int connects(int family, unsigned short port) {
+  int s = socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  if (s < 0)
+    fatal("socket");
+  int r;
+  if (family == AF_INET6) {
+    struct sockaddr_in6 a = {.sin6_family = AF_INET6, .sin6_port = htons(port), .sin6_addr = in6addr_loopback};
+    r = connect(s, (struct sockaddr *)&a, sizeof(a));
+  } else {
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    r = connect(s, (struct sockaddr *)&a, sizeof(a));
+  }
+  int e = errno;
+  close(s);
+  if (r == 0)
+    return 1;
+  if (e == ECONNREFUSED)
+    return 0;
+  say("connect: %s\n", strerror(e));
+  return -1;
+}
+
+// oracle: 1 if the connect oracle (where the scenario has one) agreed.
+static void check(const char *name, int got, int want, int ready_want, int ready_got, int oracle) {
   int links = links_attached();
-  int ok = got == want && (ready_want < 0 || ready_got == ready_want) && links == 0;
+  int ok = got == want && (ready_want < 0 || ready_got == ready_want) && links == 0 && oracle;
   if (!ok)
     failures++;
-  say("TEST %-24s %s (exit %d, want %d; ready %d; links left %d)\n", name, ok ? "PASS" : "FAIL", got, want,
-      ready_got, links);
+  say("TEST %-24s %s (exit %d, want %d; ready %d; links left %d; connect oracle %s)\n", name, ok ? "PASS" : "FAIL",
+      got, want, ready_got, links, oracle ? "ok" : "WRONG");
 }
 
 int main(void) {
@@ -231,6 +259,17 @@ int main(void) {
   if (mount("proc", "/proc", "proc", 0, NULL))
     fatal("mount /proc");
   mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);
+  {  // loopback starts down in a bare initramfs
+    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    struct ifreq ifr = {0};
+    strcpy(ifr.ifr_name, "lo");
+    if (s < 0 || ioctl(s, SIOCGIFFLAGS, &ifr))
+      fatal("lo flags");
+    ifr.ifr_flags |= IFF_UP;
+    if (ioctl(s, SIOCSIFFLAGS, &ifr))
+      fatal("lo up");
+    close(s);
+  }
 
   // wl.jit=0 / wl.jit=1 on the kernel command line: BPF in the interpreter
   // (as on kernels without a BPF JIT, like Raspberry Pi kernels) or JITed;
@@ -266,9 +305,13 @@ int main(void) {
     struct helper h = helper_start();
     struct wl w = wl_start(h.pid, PORT, NULL);
     int ready = wl_ready(&w);
-    if (ready)
+    int before = -1;
+    if (ready) {
+      before = connects(AF_INET, PORT);  // watching, and the port is closed
       helper_listen(&h, 'l', PORT);
-    check("listens-later", wl_wait(&w), 0, 1, ready);
+    }
+    int got = wl_wait(&w);
+    check("listens-later", got, 0, 1, ready, before == 0 && connects(AF_INET, PORT) == 1);
     helper_stop(&h);
   }
   {  // already listening: the /proc check, never ready
@@ -276,7 +319,8 @@ int main(void) {
     helper_listen(&h, 'l', PORT);
     struct wl w = wl_start(h.pid, PORT, NULL);
     int ready = wl_ready(&w);
-    check("already-listening", wl_wait(&w), 0, 0, ready);
+    int got = wl_wait(&w);
+    check("already-listening", got, 0, 0, ready, connects(AF_INET, PORT) == 1);
     helper_stop(&h);
   }
   {  // exits without listening
@@ -284,7 +328,7 @@ int main(void) {
     struct wl w = wl_start(h.pid, PORT, NULL);
     int ready = wl_ready(&w);
     helper_stop(&h);
-    check("exits", wl_wait(&w), 1, 1, ready);
+    check("exits", wl_wait(&w), 1, 1, ready, 1);
   }
   {  // another process holds the port; the target listens elsewhere first,
      // then on the port over IPv6
@@ -300,7 +344,7 @@ int main(void) {
         helper_listen(&h, '6', PORT);
     }
     int got = wl_wait(&w);
-    check("others-port-then-ipv6", saw ? got : -1, 0, 1, ready);
+    check("others-port-then-ipv6", saw ? got : -1, 0, 1, ready, connects(AF_INET6, PORT) == 1);
     helper_stop(&h);
     helper_stop(&other);
   }
@@ -308,7 +352,7 @@ int main(void) {
     struct helper h = helper_start();
     struct wl w = wl_start(h.pid, PORT, "1");
     int ready = wl_ready(&w);
-    check("timeout", wl_wait(&w), 2, 1, ready);
+    check("timeout", wl_wait(&w), 2, 1, ready, 1);
     helper_stop(&h);
   }
   {  // SIGTERM: orderly teardown
@@ -317,7 +361,7 @@ int main(void) {
     int ready = wl_ready(&w);
     if (ready)
       kill(w.pid, SIGTERM);
-    check("sigterm", wl_wait(&w), 6, 1, ready);
+    check("sigterm", wl_wait(&w), 6, 1, ready, 1);
     helper_stop(&h);
   }
   {  // SIGKILL: the kernel's teardown
@@ -326,8 +370,42 @@ int main(void) {
     int ready = wl_ready(&w);
     if (ready)
       kill(w.pid, SIGKILL);
-    check("sigkill", wl_wait(&w), 100 + SIGKILL, 1, ready);
+    check("sigkill", wl_wait(&w), 100 + SIGKILL, 1, ready, 1);
     helper_stop(&h);
+  }
+  {  // a real program: the target execs busybox's nc -l once wait-listen is
+     // watching (same pid, so the same thread group)
+    int go[2];
+    if (pipe(go))
+      fatal("pipe");
+    pid_t t = fork();
+    if (t < 0)
+      fatal("fork");
+    if (t == 0) {
+      close(go[1]);
+      char b;
+      if (read(go[0], &b, 1) != 1)
+        _exit(0);
+      int null = open("/dev/null", O_RDWR);
+      dup2(null, 0);
+      dup2(null, 1);
+      execl(BUSYBOX, "nc", "-l", "-p", "9105", (char *)NULL);
+      _exit(127);
+    }
+    close(go[0]);
+    struct wl w = wl_start(t, PORT, NULL);
+    int ready = wl_ready(&w);
+    int before = -1;
+    if (ready) {
+      before = connects(AF_INET, PORT);
+      if (write(go[1], "g", 1) != 1)
+        fatal("go");
+    }
+    int got = wl_wait(&w);
+    check("busybox-nc", got, 0, 1, ready, before == 0 && connects(AF_INET, PORT) == 1);
+    close(go[1]);
+    kill(t, SIGKILL);
+    waitpid(t, NULL, 0);
   }
 
   say("WAIT-LISTEN-VM-TESTS: %s (%d failure(s))\n", failures ? "FAIL" : "PASS", failures);
