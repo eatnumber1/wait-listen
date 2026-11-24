@@ -1,5 +1,6 @@
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # The BPF object, compiled with the hermetic Clang for -target bpf. BPF
 # bytecode is the same for every host architecture. Only the kernel UAPI
@@ -31,7 +32,11 @@ genrule(
           esac
         done
         test -n "$$uapi"
+        # -g: libbpf needs the object's BTF (the .maps definitions). The
+        # prefix map keeps the build directory (a per-build sandbox path)
+        # out of the debug info, so the binary is reproducible.
         $(execpath @llvm_musl_llvm//:bin/clang) -target bpf -O2 -g -Wall -Werror \
+          -ffile-prefix-map=$$PWD=. -ffile-prefix-map=$$(pwd -P)=. \
           -nostdinc -I$$inc -I$$uapi -I$$uapi/x86_64-linux-gnu \
           -c $(location src/wait_listen.bpf.c) -o $@
     """,
@@ -99,3 +104,17 @@ cc_test(
     )
     for arch in ["x86_64", "armv7"]
 ]
+
+# Reproducibility: no build directory inside the release binaries.
+sh_test(
+    name = "no_build_paths_test",
+    srcs = ["tests/no_build_paths_test.sh"],
+    args = [
+        "$(rootpaths :wait-listen_x86_64)",
+        "$(rootpaths :wait-listen_armv7)",
+    ],
+    data = [
+        ":wait-listen_armv7",
+        ":wait-listen_x86_64",
+    ],
+)

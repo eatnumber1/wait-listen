@@ -67,6 +67,11 @@ jobs:
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # One release job at a time, in order: two at once would both delete and
+    # recreate `latest`. A newer push supersedes a release still waiting.
+    concurrency:
+      group: release
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
