@@ -50,6 +50,10 @@ ExecStartPost=+/usr/local/bin/wait-listen --pid ${MAINPID} --port 9105
 WantedBy=multi-user.target
 ```
 
+`ExecStartPost=` runs while the daemon is already starting, so the daemon
+may listen before wait-listen starts, while it starts, or after. All three
+are fine: wait-listen starts watching *before* it looks whether the daemon
+already listens (see "How it works"), so no `listen()` falls between the two.
 If the daemon exits before it listens, wait-listen exits 1 and the start
 fails, as it should.
 
