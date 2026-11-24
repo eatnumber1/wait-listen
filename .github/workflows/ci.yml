@@ -1,8 +1,10 @@
 # CI: `test` runs the whole suite (`bazel test //...`: the unit test, and the
 # VM tests, which boot pinned Debian kernels in a pinned QEMU, TCG only, so no
-# KVM is needed); `release`, nightly and on demand, builds the static musl
-# binaries and publishes them as the `nightly` prerelease, unless main hasn't
-# changed since the last one.
+# KVM is needed) on every push and pull request; `release`, on each push to
+# main once `test` passes (and on demand), builds the static musl binaries
+# and publishes them as the rolling `latest` prerelease, replacing the
+# previous one. Events, not a timer: a release exists exactly when main has
+# changed and passed.
 #
 # Developed and checked locally with nektos/act before pushing
 # (third_party/act/README.md): `bazel run //third_party/act -- -j test`.
@@ -18,8 +20,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: "23 9 * * *"
   workflow_dispatch:
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
           restore-keys: disk-test-
       - name: Test
         # The release configuration (.github/ci/release.sh), so the binaries
-        # the VM tests run are the ones the nightly ships.
+        # the VM tests run are the ones the release ships.
         run: bazel test -c opt --strip=always //...
       - name: Save repository cache
         if: always()
@@ -64,18 +64,19 @@ jobs:
 
   release:
     needs: test
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Anything new since the last nightly?
+      - name: Anything new since the last release?
+        # A manual dispatch of an unchanged main publishes nothing new.
         id: new
         run: |
-          last=$(git ls-remote origin refs/tags/nightly | cut -f1)
-          echo "last nightly: ${last:-none}; main: $GITHUB_SHA"
+          last=$(git ls-remote origin refs/tags/latest | cut -f1)
+          echo "last release: ${last:-none}; main: $GITHUB_SHA"
           if [ "$last" = "$GITHUB_SHA" ]; then
             echo "publish=false" >>"$GITHUB_OUTPUT"
           else
@@ -94,12 +95,12 @@ jobs:
       - name: Build
         if: steps.new.outputs.publish == 'true'
         run: .github/ci/release.sh dist
-      - name: Publish the nightly prerelease
+      - name: Publish the latest prerelease
         if: steps.new.outputs.publish == 'true' && !env.ACT
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete nightly --yes --cleanup-tag || true
-          gh release create nightly dist/* --prerelease --target "$GITHUB_SHA" \
-            --title "Nightly $(date -u +%Y-%m-%d) (${GITHUB_SHA::12})" \
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "Latest main (${GITHUB_SHA::12})" \
             --notes "Static musl builds of ${GITHUB_SHA} (x86-64 and 32-bit Arm). Verify with \`sha256sum -c SHA256SUMS\`."

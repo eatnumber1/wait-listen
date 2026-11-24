@@ -123,12 +123,14 @@ exits (even SIGKILL). Orderly exits also detach it explicitly first.
 
 ## Installing
 
-Nightly static builds (x86-64 and 32-bit Arm) are attached to the
-[`nightly` release](https://github.com/eatnumber1/wait-listen/releases/tag/nightly):
+Static builds (x86-64 and 32-bit Arm) of the latest `main` that passed the
+tests are attached to the
+[`latest` release](https://github.com/eatnumber1/wait-listen/releases/tag/latest),
+replaced on every push:
 
 ```
-curl -fLO https://github.com/eatnumber1/wait-listen/releases/download/nightly/wait-listen-x86_64
-curl -fLO https://github.com/eatnumber1/wait-listen/releases/download/nightly/SHA256SUMS
+curl -fLO https://github.com/eatnumber1/wait-listen/releases/download/latest/wait-listen-x86_64
+curl -fLO https://github.com/eatnumber1/wait-listen/releases/download/latest/SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 install -m 0755 wait-listen-x86_64 /usr/local/bin/wait-listen
 ```
@@ -150,8 +152,9 @@ scenario as root inside them, checking each answer against reality: a client
 can connect when wait-listen says the port is open, and couldn't before.
 Nothing on the host needs root or KVM.
 
-CI (`.github/workflows/ci.yml`) runs the tests on every push and publishes
-the nightly; it's checked locally with nektos/act first
+CI (`.github/workflows/ci.yml`) runs the tests on every push and pull
+request and, for each push to `main` that passes, publishes the `latest`
+release; it's checked locally with nektos/act first
 (`bazel run //third_party/act -- -j test`, see
 [third_party/act/README.md](third_party/act/README.md)).
 
