@@ -90,6 +90,10 @@ Limitations of this form: it follows COMMAND's threads, not processes it
 forks (a daemon that listens in a forked child times out); a job-control
 stop (SIGSTOP) during the wait is resumed; and it needs ptrace to be allowed
 (not under Yama `ptrace_scope` 3, or a seccomp policy that forbids it).
+COMMAND must be built for wait-listen's own architecture (a 32-bit x86
+program under the x86-64 build makes its system calls differently). The
+descriptors for `--pid-fd` and `--ready-fd` aren't passed to COMMAND, so they
+can't be 0, 1 or 2.
 
 ## How it works
 

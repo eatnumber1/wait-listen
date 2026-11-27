@@ -14,6 +14,7 @@
 #define _GNU_SOURCE
 #include "trace.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/ptrace.h>
@@ -80,13 +81,48 @@ static int delivered(int status) {
   return sig;
 }
 
-// Detaches from every thread; `stopped` is in a stop now. Running threads
-// are interrupted, and each detached as it reports its stop (still events).
-static int detach_all(pid_t stopped, int status) {
+// Whether thread tid of process pid is alive (not a zombie, not gone).
+static int live(pid_t pid, pid_t tid) {
+  char path[64], buf[512];
+  snprintf(path, sizeof(path), "/proc/%d/task/%d/stat", (int)pid, (int)tid);
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    return 0;
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0)
+    return 0;
+  buf[n] = 0;
+  char *state = strrchr(buf, ')');  // after the command name, which may hold spaces
+  return state && state[1] == ' ' && state[2] != 'Z' && state[2] != 'X';
+}
+
+// Detaches from every thread of pid; `stopped` is in a stop now. The
+// threads to detach are those alive now, per /proc: the list built from
+// stops can hold a zombie leader (pthread_exit() while others run) or a
+// thread an exec replaced, neither of which would ever report. Each live
+// one is interrupted and detached as it reports its stop (still events). A
+// thread cloned meanwhile reports a clone event first: it joins the set.
+static int detach_all(pid_t pid, pid_t stopped, int status) {
   pt(PTRACE_DETACH, stopped, 0, (unsigned long)delivered(status));
-  forget(stopped);
-  for (int i = 0; i < nthreads; i++)
-    pt(PTRACE_INTERRUPT, threads[i].tid, 0, 0);
+  nthreads = 0;
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%d/task", (int)pid);
+  DIR *d = opendir(path);
+  if (!d)
+    return errno == ENOENT ? 0 : -1;
+  struct dirent *e;
+  while ((e = readdir(d))) {
+    pid_t tid = (pid_t)atoi(e->d_name);
+    if (tid <= 0 || tid == stopped || !live(pid, tid))
+      continue;
+    if (pt(PTRACE_INTERRUPT, tid, 0, 0) == 0 && !add(tid)) {
+      closedir(d);
+      errno = ENOMEM;
+      return -1;
+    }
+  }
+  closedir(d);
   while (nthreads) {
     int st;
     pid_t tid = waitpid(-1, &st, __WALL);
@@ -95,8 +131,16 @@ static int detach_all(pid_t stopped, int status) {
         continue;
       return -1;
     }
-    if (WIFSTOPPED(st))
+    if (WIFSTOPPED(st)) {
+      if ((st >> 16) == PTRACE_EVENT_CLONE) {
+        unsigned long child;
+        if (pt(PTRACE_GETEVENTMSG, tid, 0, (unsigned long)&child) == 0 && !add((pid_t)child)) {
+          errno = ENOMEM;
+          return -1;
+        }
+      }
       pt(PTRACE_DETACH, tid, 0, (unsigned long)delivered(st));
+    }
     forget(tid);
   }
   return 0;
@@ -111,6 +155,11 @@ int trace_run(char **cmd, unsigned port, unsigned long timeout, int ready_fd, in
   sigaddset(&mask, SIGINT);
   sigaddset(&mask, SIGHUP);
   if (sigprocmask(SIG_BLOCK, &mask, &old))
+    goto fail;
+  // An ignored SIGCHLD (or SA_NOCLDSTOP), inherited from whoever started us,
+  // would hide ptrace stops from the signalfd (and reap exits): the default.
+  struct sigaction dfl = {.sa_handler = SIG_DFL};
+  if (sigaction(SIGCHLD, &dfl, NULL))
     goto fail;
   int sfd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
   int ep = epoll_create1(EPOLL_CLOEXEC);
@@ -209,6 +258,14 @@ int trace_run(char **cmd, unsigned port, unsigned long timeout, int ready_fd, in
       if (!t)
         goto fail;
       int sig = WSTOPSIG(st);
+      if ((st >> 16) == PTRACE_EVENT_CLONE) {
+        // Know the new thread now, not only at its first stop, so a detach
+        // right after can't miss it (it would stay traced, and EXITKILL
+        // would take the whole command with us).
+        unsigned long newtid;
+        if (pt(PTRACE_GETEVENTMSG, tid, 0, (unsigned long)&newtid) == 0 && !add((pid_t)newtid))
+          goto fail;
+      }
       if (sig == (SIGTRAP | 0x80)) {
         struct ptrace_syscall_info info;
         if (pt(PTRACE_GET_SYSCALL_INFO, tid, sizeof(info), (unsigned long)&info) < 0)
@@ -218,9 +275,11 @@ int trace_run(char **cmd, unsigned port, unsigned long timeout, int ready_fd, in
         } else if (info.op == PTRACE_SYSCALL_INFO_EXIT && t->in_listen) {
           t->in_listen = 0;
           if (!info.exit.is_error) {
-            int r = listens_on("/proc", child, port);
+            // Through the thread that listened: the leader may be a zombie
+            // already (its /proc/PID/fd and net/tcp then read empty).
+            int r = listens_on("/proc", tid, port);
             if (r == 1) {
-              if (detach_all(tid, st))
+              if (detach_all(child, tid, st))
                 goto fail;
               if (verbose)
                 fprintf(stderr, "wait-listen: pid %d listens on port %u\n", (int)child, port);
@@ -232,6 +291,8 @@ int trace_run(char **cmd, unsigned port, unsigned long timeout, int ready_fd, in
             }
             if (verbose && r == 0)
               fprintf(stderr, "wait-listen: pid %d listened, but not on port %u yet\n", (int)child, port);
+            if (verbose && r < 0)
+              fprintf(stderr, "wait-listen: can't read /proc/%d: %s\n", (int)tid, strerror(errno));
           }
         }
         sig = 0;

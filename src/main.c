@@ -352,6 +352,10 @@ int main(int argc, char **argv) {
     // Unprivileged mode: start the command and trace it (src/trace.c).
     if (optind == argc)
       goto bad;
+    // The command doesn't inherit these (trace.c closes them in it): not
+    // its stdin, stdout or stderr.
+    if ((pid_fd >= 0 && pid_fd <= 2) || (ready_fd >= 0 && ready_fd <= 2))
+      goto bad;
     return trace_run(argv + optind, (unsigned)port, timeout, ready_fd, pid_fd, verbose);
   }
   if (optind != argc || pid_fd >= 0)
