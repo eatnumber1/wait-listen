@@ -61,8 +61,6 @@ fails, as it should.
 
 ## How it works
 
-How it runs:
-
 1. wait-listen opens a pidfd for the process, so its exit is an event too.
 2. It loads two small BPF programs onto raw tracepoints. One, on
    `inet_sock_set_state` (any TCP socket changing state), notes the thread
