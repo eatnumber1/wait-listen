@@ -10,13 +10,20 @@ the given process puts a socket on the given port into the listening state.
 
 ```
 wait-listen --pid PID --port PORT [--timeout SECONDS] [--ready-fd FD] [--verbose]
+wait-listen --port PORT [--timeout SECONDS] [--ready-fd FD] [--pid-fd FD] [--verbose] -- COMMAND [ARG...]
 ```
+
+The first form watches a running process and needs privileges (BPF). The
+second starts COMMAND itself and needs none: see [Unprivileged: start the
+command](#unprivileged-start-the-command).
 
 - `--timeout SECONDS`: give up after this long (exit 2). Off by default: it's
   an upper bound for a hang, not a wait.
 - `--ready-fd FD`: write one byte to file descriptor FD, then close it, once
   wait-listen is watching and the process isn't already listening. From then
   on, a `listen()` can't be missed.
+- `--pid-fd FD` (second form): once COMMAND listens, write its pid and a
+  newline to file descriptor FD, then close it.
 - `--verbose`: also report each `listen()` by the process that wasn't on the
   port.
 
@@ -57,7 +64,36 @@ already listens (see "How it works"), so no `listen()` falls between the two.
 If the daemon exits before it listens, wait-listen exits 1 and the start
 fails, as it should.
 
+## Unprivileged: start the command
+
+`wait-listen --port PORT -- COMMAND [ARG...]` starts COMMAND as its own
+child, traces it (ptrace: any user may trace their own child, so no
+privileges), and returns 0 once a `listen()` by any of its threads has
+returned with the process listening on PORT. Then it detaches: COMMAND keeps
+running, untraced, and its pid goes to `--pid-fd`. If COMMAND exits first,
+or the timeout or a signal stops wait-listen, COMMAND is killed (exit 1, 2,
+6): a start that can't be confirmed fails. For tests and scripts that start
+a daemon themselves:
+
+```
+exec 3>daemon.pid
+wait-listen --port 9105 --timeout 60 --pid-fd 3 -- example-daemon --foreground
+```
+
+Nothing polls here either: each system call's return is a ptrace stop, and
+wait-listen sleeps in `epoll` on a signalfd (and the timer) in between. It
+reads the stops with `PTRACE_GET_SYSCALL_INFO` (Linux 5.3), so no register
+layouts. While waiting it stops COMMAND at every system call, which slows
+its start a little.
+
+Limitations of this form: it follows COMMAND's threads, not processes it
+forks (a daemon that listens in a forked child times out); a job-control
+stop (SIGSTOP) during the wait is resumed; and it needs ptrace to be allowed
+(not under Yama `ptrace_scope` 3, or a seccomp policy that forbids it).
+
 ## How it works
+
+The first form (`--pid`):
 
 1. wait-listen opens a pidfd for the process, so its exit is an event too.
 2. It loads two small BPF programs onto raw tracepoints. One, on

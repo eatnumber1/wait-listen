@@ -21,6 +21,7 @@
 #include <bpf/libbpf.h>
 
 #include "listening.h"
+#include "trace.h"
 
 enum {
   EXIT_LISTENING = 0,
@@ -55,6 +56,8 @@ static void usage(FILE *f) {
   fprintf(f,
           "usage: wait-listen --pid PID --port PORT [--timeout SECONDS] [--ready-fd FD]\n"
           "                   [--verbose]\n"
+          "       wait-listen --port PORT [--timeout SECONDS] [--ready-fd FD] [--pid-fd FD]\n"
+          "                   [--verbose] -- COMMAND [ARG...]\n"
           "Exit: 0 listening, 1 process gone, 2 timeout, 3 usage, 4 kernel can't, 5 error,\n"
           "6 stopped by a signal.\n");
 }
@@ -297,11 +300,12 @@ int main(int argc, char **argv) {
       {"timeout", required_argument, NULL, 't'},
       {"verbose", no_argument, NULL, 'v'},
       {"ready-fd", required_argument, NULL, 'r'},
+      {"pid-fd", required_argument, NULL, 'f'},
       {"help", no_argument, NULL, 'h'},
       {0},
   };
   unsigned long pid = 0, port = 0, timeout = 0;
-  int have_pid = 0, have_port = 0, c;
+  int have_pid = 0, have_port = 0, pid_fd = -1, c;
   while ((c = getopt_long(argc, argv, "", options, NULL)) != -1) {
     switch (c) {
       case 'p':
@@ -328,6 +332,13 @@ int main(int argc, char **argv) {
         ready_fd = (int)fd;
         break;
       }
+      case 'f': {
+        unsigned long fd;
+        if (parse_uint(optarg, INT_MAX, &fd))
+          goto bad;
+        pid_fd = (int)fd;
+        break;
+      }
       case 'h':
         usage(stdout);
         return EXIT_LISTENING;
@@ -335,7 +346,15 @@ int main(int argc, char **argv) {
         goto bad;
     }
   }
-  if (optind != argc || !have_pid || !have_port)
+  if (!have_port)
+    goto bad;
+  if (!have_pid) {
+    // Unprivileged mode: start the command and trace it (src/trace.c).
+    if (optind == argc)
+      goto bad;
+    return trace_run(argv + optind, (unsigned)port, timeout, ready_fd, pid_fd, verbose);
+  }
+  if (optind != argc || pid_fd >= 0)
     goto bad;
 
   libbpf_set_print(libbpf_log);

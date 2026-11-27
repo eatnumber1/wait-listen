@@ -494,6 +494,40 @@ int main(void) {
     waitpid(t, NULL, 0);
   }
 
+  {  // the unprivileged mode: wait-listen starts busybox's nc -l itself and
+     // traces it (ptrace, syscall numbers of this architecture), returns once
+     // it listens, and leaves it running untraced
+    int pidp[2];
+    if (pipe(pidp))
+      fatal("pipe");
+    char port[8], fd[8];
+    snprintf(port, sizeof(port), "%u", PORT);
+    snprintf(fd, sizeof(fd), "%d", pidp[1]);
+    int before = connects(AF_INET, PORT);
+    pid_t w = fork();
+    if (w < 0)
+      fatal("fork");
+    if (w == 0) {
+      close(pidp[0]);
+      execl(WL, WL, "--port", port, "--timeout", "60", "--pid-fd", fd, "--", BUSYBOX, "nc", "-l", "-p", port,
+            (char *)NULL);
+      _exit(98);
+    }
+    close(pidp[1]);
+    int st;
+    waitpid(w, &st, 0);
+    int got = WIFEXITED(st) ? WEXITSTATUS(st) : 100 + WTERMSIG(st);
+    char buf[16] = {0};
+    ssize_t r = read(pidp[0], buf, sizeof(buf) - 1);
+    close(pidp[0]);
+    pid_t nc = r > 0 ? atoi(buf) : 0;
+    check("trace-busybox-nc", got, 0, -1, 0, before == 0 && nc > 0 && connects(AF_INET, PORT) == 1);
+    if (nc > 0) {
+      kill(nc, SIGKILL);
+      waitpid(nc, NULL, 0);  // our grandchild's parent is gone: PID 1 (us) reaps it
+    }
+  }
+
   say("WAIT-LISTEN-VM-TESTS: %s (%d failure(s))\n", failures ? "FAIL" : "PASS", failures);
   sync();
   reboot(RB_POWER_OFF);

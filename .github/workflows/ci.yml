@@ -19,6 +19,9 @@ name: CI
 on:
   push:
     branches: [main]
+    # A version tag (vX.Y.Z) publishes a release of its own, kept for good,
+    # for others to pin by hash; `latest` keeps following main.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -64,7 +67,7 @@ jobs:
 
   release:
     needs: test
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # One release job at a time, in order: two at once would both delete and
@@ -77,9 +80,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Anything new since the last release?
-        # A manual dispatch of an unchanged main publishes nothing new.
+        # A manual dispatch of an unchanged main publishes nothing new. A
+        # version tag always publishes (once: tags don't move).
         id: new
         run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "publish=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
           last=$(git ls-remote origin refs/tags/latest | cut -f1)
           echo "last release: ${last:-none}; main: $GITHUB_SHA"
           if [ "$last" = "$GITHUB_SHA" ]; then
@@ -100,8 +108,16 @@ jobs:
       - name: Build
         if: steps.new.outputs.publish == 'true'
         run: .github/ci/release.sh dist
+      - name: Publish the version release
+        if: steps.new.outputs.publish == 'true' && github.ref_type == 'tag' && !env.ACT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
+            --title "wait-listen $GITHUB_REF_NAME" \
+            --notes "Static musl builds of ${GITHUB_SHA} (x86-64 and 32-bit Arm). Verify with \`sha256sum -c SHA256SUMS\`."
       - name: Publish the latest prerelease
-        if: steps.new.outputs.publish == 'true' && !env.ACT
+        if: steps.new.outputs.publish == 'true' && github.ref_type != 'tag' && !env.ACT
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

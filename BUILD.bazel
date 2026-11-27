@@ -63,7 +63,11 @@ cc_library(
 
 cc_binary(
     name = "wait-listen",
-    srcs = ["src/main.c"],
+    srcs = [
+        "src/main.c",
+        "src/trace.c",
+        "src/trace.h",
+    ],
     visibility = ["//visibility:public"],
     copts = [
         "-std=gnu23",
@@ -116,5 +120,27 @@ sh_test(
     data = [
         ":wait-listen_armv7",
         ":wait-listen_x86_64",
+    ],
+)
+
+# The unprivileged mode (--port P -- COMMAND), run as an ordinary user: no
+# VM or root needed (tests/trace_test.c).
+cc_binary(
+    name = "trace_helper",
+    srcs = ["tests/trace_helper.c"],
+    linkopts = ["-lpthread"],
+    testonly = True,
+)
+
+cc_test(
+    name = "trace_test",
+    srcs = ["tests/trace_test.c"],
+    args = [
+        "$(rootpath :wait-listen)",
+        "$(rootpath :trace_helper)",
+    ],
+    data = [
+        ":trace_helper",
+        ":wait-listen",
     ],
 )
